@@ -216,8 +216,16 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<String?> login(String email, String password) async {
+  Future<String?> login(String loginKey, String password) async {
     try {
+      String email = loginKey;
+      // 입력값이 이메일 형식이 아닌 경우 이름으로 검색
+      if (!loginKey.contains('@')) {
+        final nameQuery = await _db.collection('users').where('name', isEqualTo: loginKey).get();
+        if (nameQuery.docs.isEmpty) return '해당 이름을 가진 사용자를 찾을 수 없습니다.';
+        email = nameQuery.docs.first.data()['email'];
+      }
+
       final res = await _auth.signInWithEmailAndPassword(email: email, password: password);
       final doc = await _db.collection('users').doc(res.user!.uid).get();
       if (doc.exists) {
@@ -227,7 +235,7 @@ class AuthProvider extends ChangeNotifier {
       }
       return '사용자 정보를 찾을 수 없습니다.';
     } catch (e) {
-      return '이메일 또는 비밀번호가 틀렸습니다.';
+      return '이메일(또는 이름) 또는 비밀번호가 틀렸습니다.';
     }
   }
 
@@ -566,7 +574,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 8),
                     Text('당신의 하루를 기록하세요', style: TextStyle(color: Colors.grey[600])),
                     const SizedBox(height: 40),
-                    TextField(controller: emailController, decoration: InputDecoration(labelText: '이메일', prefixIcon: const Icon(Icons.email_outlined), border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+                    TextField(controller: emailController, decoration: InputDecoration(labelText: '이메일 또는 이름', prefixIcon: const Icon(Icons.person_outline), border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
                     const SizedBox(height: 16),
                     TextField(controller: passwordController, obscureText: true, decoration: InputDecoration(labelText: '비밀번호', prefixIcon: const Icon(Icons.lock_outline), border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
                     const SizedBox(height: 32),
@@ -1277,7 +1285,6 @@ class TodoItemTile extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         child: ListTile(
           onTap: onTap,
-          leading: Checkbox(value: todo.isCompleted, onChanged: (v) => context.read<TodoProvider>().toggleTodo(todo)),
           title: Text(todo.title, style: TextStyle(decoration: todo.isCompleted ? TextDecoration.lineThrough : null, fontWeight: FontWeight.bold)),
           subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (todo.description.isNotEmpty) Text(todo.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.grey)),
