@@ -13,9 +13,10 @@ void showAddEditTodoDialog(BuildContext context, {Todo? existing, DateTime? init
   final authP = context.read<AuthProvider>();
   List<TodoCategory> selectedCats = List.from(existing?.categories ?? []);
   
-  bool isAllDay = existing != null && 
-                  existing.startDateTime.hour == 0 && existing.startDateTime.minute == 0 &&
-                  existing.endDateTime.hour == 0 && existing.endDateTime.minute == 0;
+  // '시간 지정' 여부: 기존 일정이 00:00:00이 아니면 지정된 것으로 판단, 기본값은 false(미지정)
+  bool isTimeEnabled = existing != null && 
+                      !(existing.startDateTime.hour == 0 && existing.startDateTime.minute == 0 &&
+                        existing.endDateTime.hour == 0 && existing.endDateTime.minute == 0);
 
   DateTime start = existing?.startDateTime ?? initial ?? DateTime.now();
   DateTime end = existing?.endDateTime ?? start.add(const Duration(hours: 1));
@@ -30,8 +31,8 @@ void showAddEditTodoDialog(BuildContext context, {Todo? existing, DateTime? init
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
               Text(existing == null ? '일정 추가' : '일정 수정', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               Row(children: [
-                const Text('시간 미지정', style: TextStyle(fontSize: 12)),
-                Switch(value: isAllDay, onChanged: (v)=>setModalState(()=>isAllDay=v)),
+                const Text('시간 지정', style: TextStyle(fontSize: 12)),
+                Switch(value: isTimeEnabled, onChanged: (v)=>setModalState(()=>isTimeEnabled=v)),
               ]),
             ]),
             const SizedBox(height: 20),
@@ -51,21 +52,22 @@ void showAddEditTodoDialog(BuildContext context, {Todo? existing, DateTime? init
               final d = await showDatePicker(context: context, initialDate: start, firstDate: DateTime(2020), lastDate: DateTime(2030));
               if(d != null) setModalState(() => start = DateTime(d.year, d.month, d.day, start.hour, start.minute));
             }),
-            if(!isAllDay) ListTile(title: const Text('시작 시간'), subtitle: Text(DateFormat('HH:mm').format(start)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
+            if(isTimeEnabled) ListTile(title: const Text('시작 시간'), subtitle: Text(DateFormat('HH:mm').format(start)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
               showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: start, onDateTimeChanged: (d)=>setModalState(()=>start=DateTime(start.year, start.month, start.day, d.hour, d.minute)))));
             }),
             ListTile(title: const Text('종료 날짜'), subtitle: Text(DateFormat('yyyy-MM-dd').format(end)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () async {
               final d = await showDatePicker(context: context, initialDate: end, firstDate: DateTime(2020), lastDate: DateTime(2030));
               if(d != null) setModalState(() => end = DateTime(d.year, d.month, d.day, end.hour, end.minute));
             }),
-            if(!isAllDay) ListTile(title: const Text('종료 시간'), subtitle: Text(DateFormat('HH:mm').format(end)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
+            if(isTimeEnabled) ListTile(title: const Text('종료 시간'), subtitle: Text(DateFormat('HH:mm').format(end)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
               showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: end, onDateTimeChanged: (d)=>setModalState(()=>end=DateTime(end.year, end.month, end.day, d.hour, d.minute)))));
             }),
             const SizedBox(height: 30),
             SizedBox(width: double.infinity, height: 50, child: FilledButton(onPressed: () {
               if(tController.text.isNotEmpty) {
-                final fs = isAllDay ? DateTime(start.year, start.month, start.day) : start;
-                final fe = isAllDay ? DateTime(end.year, end.month, end.day).add(const Duration(days: 1)) : end;
+                // 시간 지정이 꺼져 있으면 00:00:00 으로 저장
+                final fs = isTimeEnabled ? start : DateTime(start.year, start.month, start.day);
+                final fe = isTimeEnabled ? end : DateTime(end.year, end.month, end.day).add(const Duration(days: 1));
                 final nt = Todo(
                   id: existing?.id ?? const Uuid().v4(), 
                   userId: authP.currentUser!.uid, 
