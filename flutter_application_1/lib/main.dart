@@ -237,12 +237,12 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String> sendFriendRequest(String targetEmail) async {
+  Future<String> sendFriendRequest(String targetName) async {
     try {
-      if (targetEmail == _currentUser!.email) return '자기 자신에게는 요청을 보낼 수 없습니다.';
+      if (targetName == _currentUser!.name) return '자기 자신에게는 요청을 보낼 수 없습니다.';
 
-      final query = await _db.collection('users').where('email', isEqualTo: targetEmail).get();
-      if (query.docs.isEmpty) return '해당 이메일을 가진 사용자를 찾을 수 없습니다.';
+      final query = await _db.collection('users').where('name', isEqualTo: targetName).get();
+      if (query.docs.isEmpty) return '해당 이름을 가진 사용자를 찾을 수 없습니다.';
       
       final targetDoc = query.docs.first;
       final target = AppUser.fromMap(targetDoc.data());
@@ -274,18 +274,21 @@ class AuthProvider extends ChangeNotifier {
       final senderQuery = await _db.collection('users').where('email', isEqualTo: senderEmail).get();
       if (senderQuery.docs.isEmpty) return '보낸 사용자를 찾을 수 없습니다.';
       final senderDoc = senderQuery.docs.first;
+      final senderData = AppUser.fromMap(senderDoc.data());
       
       await _db.runTransaction((transaction) async {
+        // 내 친구 목록에 상대방 추가, 요청 목록에서 제거
         transaction.update(_db.collection('users').doc(_currentUser!.uid), {
           'incomingRequests': FieldValue.arrayRemove([senderEmail]),
           'friends': FieldValue.arrayUnion([senderEmail])
         });
+        // 상대방 친구 목록에 나 추가
         transaction.update(senderDoc.reference, {
           'friends': FieldValue.arrayUnion([_currentUser!.email])
         });
       });
       
-      // Refresh local state
+      // 로컬 상태 갱신
       final updated = await _db.collection('users').doc(_currentUser!.uid).get();
       _currentUser = AppUser.fromMap(updated.data()!);
       notifyListeners();
@@ -300,11 +303,15 @@ class NotificationProvider extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   Stream<List<AppNotification>> getNotificationStream(String uid) {
+    // timestamp 정렬을 위해 인덱스가 필요할 수 있으므로, 에러 발생 시를 대비해 기본 스트림을 제공합니다.
     return _db.collection('notifications')
         .where('targetUid', isEqualTo: uid)
-        .orderBy('timestamp', descending: true)
         .snapshots()
-        .map((snap) => snap.docs.map((doc) => AppNotification.fromMap(doc.data())).toList());
+        .map((snap) {
+          var list = snap.docs.map((doc) => AppNotification.fromMap(doc.data())).toList();
+          list.sort((a, b) => b.timestamp.compareTo(a.timestamp)); // 메모리 내 정렬로 변경하여 인덱스 에러 방지
+          return list;
+        });
   }
 
   Future<void> markAsRead(String notifId) async {
@@ -931,7 +938,7 @@ class SettingsScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16.0),
               child: Row(
                 children: [
-                  Expanded(child: TextField(controller: nameController, decoration: const InputDecoration(hintText: '친구 이메일 입력', border: InputBorder.none))),
+                  Expanded(child: TextField(controller: nameController, decoration: const InputDecoration(hintText: '친구 이름 입력', border: InputBorder.none))),
                   IconButton.filledTonal(onPressed: () async {
                     if (nameController.text.isNotEmpty) {
                       final msg = await authProvider.sendFriendRequest(nameController.text.trim());
