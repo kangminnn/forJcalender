@@ -218,10 +218,9 @@ class AuthProvider extends ChangeNotifier {
 
   Future<String?> login(String loginKey, String password) async {
     try {
-      String email = loginKey;
-      // 입력값이 이메일 형식이 아닌 경우 이름으로 검색
-      if (!loginKey.contains('@')) {
-        final nameQuery = await _db.collection('users').where('name', isEqualTo: loginKey).get();
+      String email = loginKey.trim();
+      if (!email.contains('@')) {
+        final nameQuery = await _db.collection('users').where('name', isEqualTo: email).get();
         if (nameQuery.docs.isEmpty) return '해당 이름을 가진 사용자를 찾을 수 없습니다.';
         email = nameQuery.docs.first.data()['email'];
       }
@@ -235,7 +234,7 @@ class AuthProvider extends ChangeNotifier {
       }
       return '사용자 정보를 찾을 수 없습니다.';
     } catch (e) {
-      return '이메일(또는 이름) 또는 비밀번호가 틀렸습니다.';
+      return '로그인 정보가 올바르지 않습니다.';
     }
   }
 
@@ -672,7 +671,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         onDestinationSelected: (i) => setState(() => _currentIndex = i),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.calendar_month_outlined), label: '캘린더'),
-          NavigationDestination(icon: Icon(Icons.checklist_outlined), label: '할 일'),
+          NavigationDestination(icon: Icon(Icons.checklist_outlined), label: '일정'),
         ],
       ),
     );
@@ -703,6 +702,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final titleController = TextEditingController(text: existingTodo?.title);
     final descController = TextEditingController(text: existingTodo?.description);
     List<TodoCategory> selectedCategories = List.from(existingTodo?.categories ?? []);
+    
+    // 시간 미지정 여부 확인 (00:00:00 인지 확인)
+    bool isAllDay = existingTodo != null && 
+                    existingTodo.startDateTime.hour == 0 && existingTodo.startDateTime.minute == 0 &&
+                    existingTodo.endDateTime.hour == 0 && existingTodo.endDateTime.minute == 0;
+
     DateTime start = existingTodo?.startDateTime ?? initialDate ?? DateTime.now();
     DateTime end = existingTodo?.endDateTime ?? start.add(const Duration(hours: 1));
     String? validationError; 
@@ -747,6 +752,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                       } else {
                         end = DateTime(end.year, end.month, end.day, d.hour, d.minute);
                       }
+                      isAllDay = false;
                       validationError = null;
                     }),
                   ),
@@ -768,7 +774,21 @@ class _CalendarScreenState extends State<CalendarScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('일정 설정', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('일정 설정', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    Row(
+                      children: [
+                        const Text('시간 미지정', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                        Switch(
+                          value: isAllDay, 
+                          onChanged: (v) => setModalState(() => isAllDay = v),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 20),
                 TextField(controller: titleController, decoration: InputDecoration(hintText: '일정 제목', filled: true, fillColor: Theme.of(context).brightness == Brightness.light ? Colors.grey[100] : Colors.grey[800], border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none))),
                 const SizedBox(height: 12),
@@ -778,7 +798,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 Row(
                   children: [
                     Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('yyyy.MM.dd').format(start)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () => pickDate(true, setModalState))),
-                    Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('HH:mm').format(start)), trailing: const Icon(Icons.access_time, size: 18), onTap: () => pickTime(true, setModalState))),
+                    if (!isAllDay) Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('HH:mm').format(start)), trailing: const Icon(Icons.access_time, size: 18), onTap: () => pickTime(true, setModalState))),
                   ],
                 ),
                 const Divider(height: 1),
@@ -787,7 +807,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 Row(
                   children: [
                     Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('yyyy.MM.dd').format(end)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () => pickDate(false, setModalState))),
-                    Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('HH:mm').format(end)), trailing: const Icon(Icons.access_time, size: 18), onTap: () => pickTime(false, setModalState))),
+                    if (!isAllDay) Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('HH:mm').format(end)), trailing: const Icon(Icons.access_time, size: 18), onTap: () => pickTime(false, setModalState))),
                   ],
                 ),
                 const Divider(height: 1),
@@ -823,13 +843,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     if(existingTodo != null) Expanded(child: OutlinedButton(onPressed: () { context.read<TodoProvider>().deleteTodo(existingTodo.id); Navigator.pop(context); }, style: OutlinedButton.styleFrom(foregroundColor: Colors.red), child: const Text('삭제'))),
                     if(existingTodo != null) const SizedBox(width: 10),
                     Expanded(flex: 2, child: FilledButton(onPressed: () {
-                      if (end.isBefore(start)) {
+                      DateTime finalStart = isAllDay ? DateTime(start.year, start.month, start.day) : start;
+                      DateTime finalEnd = isAllDay ? DateTime(end.year, end.month, end.day).add(const Duration(days: 1)) : end;
+
+                      if (finalEnd.isBefore(finalStart)) {
                         setModalState(() => validationError = '시작 시간은 종료 시간 이전이어야 합니다.');
                         return;
                       }
                       if(titleController.text.isNotEmpty) {
                         final user = context.read<AuthProvider>().currentUser!;
-                        final newTodo = Todo(id: existingTodo?.id ?? const Uuid().v4(), userId: user.uid, title: titleController.text, description: descController.text, startDateTime: start, endDateTime: end, categories: selectedCategories, isCompleted: existingTodo?.isCompleted ?? false);
+                        final newTodo = Todo(id: existingTodo?.id ?? const Uuid().v4(), userId: user.uid, title: titleController.text, description: descController.text, startDateTime: finalStart, endDateTime: finalEnd, categories: selectedCategories, isCompleted: existingTodo?.isCompleted ?? false);
                         if(existingTodo == null) context.read<TodoProvider>().addTodo(newTodo);
                         else context.read<TodoProvider>().updateTodo(newTodo);
                         Navigator.pop(context);
@@ -1208,7 +1231,16 @@ class _TodoListScreenState extends State<TodoListScreen> {
         stream: provider.getTodoStream(auth.currentUser!.uid),
         builder: (context, snapshot) {
           final allTodos = snapshot.data ?? [];
-          final todos = _filter == null ? allTodos : allTodos.where((t) => t.categories.any((c) => c.id == _filter!.id)).toList();
+          final now = DateTime.now();
+          
+          // 지난 일정 필터링 및 카테고리 필터 적용
+          var todos = allTodos.where((t) => t.endDateTime.isAfter(now)).toList();
+          if (_filter != null) {
+            todos = todos.where((t) => t.categories.any((c) => c.id == _filter!.id)).toList();
+          }
+          
+          // 시간순 정렬
+          todos.sort((a, b) => a.startDateTime.compareTo(b.startDateTime));
 
           return Column(
             children: [
@@ -1273,8 +1305,11 @@ class TodoItemTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final startStr = DateFormat('M/d HH:mm').format(todo.startDateTime);
-    final endStr = DateFormat('M/d HH:mm').format(todo.endDateTime);
+    bool isAllDay = todo.startDateTime.hour == 0 && todo.startDateTime.minute == 0 &&
+                    todo.endDateTime.hour == 0 && todo.endDateTime.minute == 0;
+    
+    final startStr = isAllDay ? DateFormat('M/d').format(todo.startDateTime) : DateFormat('M/d HH:mm').format(todo.startDateTime);
+    final endStr = isAllDay ? DateFormat('M/d').format(todo.endDateTime.subtract(const Duration(seconds: 1))) : DateFormat('M/d HH:mm').format(todo.endDateTime);
     
     return Dismissible(
       key: Key(todo.id), direction: DismissDirection.endToStart,
@@ -1289,7 +1324,7 @@ class TodoItemTile extends StatelessWidget {
           subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (todo.description.isNotEmpty) Text(todo.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.grey)),
             const SizedBox(height: 4),
-            Text('$startStr - $endStr', style: const TextStyle(fontSize: 12, color: Colors.indigo, fontWeight: FontWeight.w600)),
+            Text(isAllDay && todo.startDateTime.day == todo.endDateTime.subtract(const Duration(seconds: 1)).day ? startStr : '$startStr - $endStr', style: const TextStyle(fontSize: 12, color: Colors.indigo, fontWeight: FontWeight.w600)),
             if (todo.categories.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
