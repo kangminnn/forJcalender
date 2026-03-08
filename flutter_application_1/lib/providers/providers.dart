@@ -197,7 +197,7 @@ class TodoProvider extends ChangeNotifier {
       await _db.collection('notifications').add(AppNotification(
         id: const Uuid().v4(),
         title: '새로운 반응',
-        message: '$senderName님이 "${todo.title}" 일정에 $emoji 반응을 남겼습니다.',
+        message: '$senderName님이 일정에 $emoji 반응을 남겼습니다.',
         timestamp: DateTime.now(),
         type: 'emoji_reaction',
         senderEmail: senderName,
@@ -223,8 +223,14 @@ class TodoProvider extends ChangeNotifier {
     final target = DateTime(date.year, date.month, date.day);
     return source.where((t) {
       final start = DateTime(t.startDateTime.year, t.startDateTime.month, t.startDateTime.day);
-      final end = DateTime(t.endDateTime.year, t.endDateTime.month, t.endDateTime.day).add(const Duration(seconds: 1));
-      return (target.isAtSameMomentAs(start) || (target.isAfter(start) && target.isBefore(end)));
+      // 종료일 계산 시, 만약 종료 시간이 자정(00:00)이라면 해당 날짜의 시작으로 간주하여 이전 날짜까지만 포함되도록 함
+      var end = DateTime(t.endDateTime.year, t.endDateTime.month, t.endDateTime.day);
+      if (t.endDateTime.hour == 0 && t.endDateTime.minute == 0 && t.endDateTime.second == 0 && t.endDateTime.millisecond == 0) {
+        // 정확히 자정인 경우, 해당 날짜는 포함하지 않음 (예: 9일 00:00 종료면 8일까지만 표시)
+        end = end.subtract(const Duration(seconds: 1));
+        end = DateTime(end.year, end.month, end.day);
+      }
+      return (target.isAtSameMomentAs(start) || target.isAtSameMomentAs(end) || (target.isAfter(start) && target.isBefore(end)));
     }).toList();
   }
 }

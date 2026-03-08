@@ -54,9 +54,7 @@ class NotificationScreen extends StatelessWidget {
                 trailing: n.type == 'friend_request' && !a.currentUser!.friends.contains(n.senderEmail) ? TextButton(onPressed: () async { final m = await a.acceptFriendRequest(n.senderEmail!); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); p.markAsRead(n.id); }, child: const Text('수락')) : null,
                 onTap: () {
                   p.markAsRead(n.id);
-                  if (n.todoId != null) {
-                    _showTodoDetails(context, n.todoId!);
-                  }
+                  // 기존에 있던 _showTodoDetails 호출을 제거하여 아무 창도 뜨지 않게 함
                 },
               ),
             );

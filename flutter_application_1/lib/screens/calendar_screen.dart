@@ -84,7 +84,20 @@ class _CalendarScreenState extends State<CalendarScreen> {
           final filtered = todoP.filterTodosByDate(_selected ?? _focused, all);
           return Column(children: [
             if (!isMe) Container(width: double.infinity, color: Colors.indigo.withOpacity(0.1), padding: const EdgeInsets.symmetric(vertical: 8), child: const Text('친구의 일정 (반응을 남겨보세요)', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.indigo))),
-            TableCalendar(locale: 'ko_KR', firstDay: DateTime.utc(2020), lastDay: DateTime.utc(2030), focusedDay: _focused, selectedDayPredicate: (d)=>isSameDay(_selected, d), onDaySelected: (s, f)=>setState((){_selected=s; _focused=f;}), eventLoader: (d)=>todoP.filterTodosByDate(d, all), headerStyle: const HeaderStyle(formatButtonVisible: false, titleCentered: true)),
+            TableCalendar(
+              locale: 'ko_KR',
+              firstDay: DateTime.utc(2020),
+              lastDay: DateTime.utc(2030),
+              focusedDay: _focused,
+              selectedDayPredicate: (d)=>isSameDay(_selected, d),
+              onDaySelected: (s, f)=>setState((){_selected=s; _focused=f;}),
+              eventLoader: (d)=>todoP.filterTodosByDate(d, all),
+              headerStyle: const HeaderStyle(formatButtonVisible: false, titleCentered: true),
+              calendarStyle: const CalendarStyle(
+                markersMaxCount: 3, // 점 개수를 최대 3개로 제한
+                markerDecoration: BoxDecoration(color: Colors.indigo, shape: BoxShape.circle),
+              ),
+            ),
             Expanded(child: Container(margin: const EdgeInsets.only(top: 10), padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Theme.of(context).cardColor, borderRadius: const BorderRadius.vertical(top: Radius.circular(30))), child: Column(children: [
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(DateFormat('MM월 dd일 일정').format(_selected!), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), if (isMe) IconButton.filledTonal(onPressed: () => _handleTodoTap(initial: _selected), icon: const Icon(Icons.add))]),
               const SizedBox(height: 10),

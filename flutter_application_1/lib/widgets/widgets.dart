@@ -110,26 +110,65 @@ void showAddEditTodoDialog(BuildContext context, {Todo? existing, DateTime? init
             ),
             const Divider(height: 1),
             const SizedBox(height: 30),
-            SizedBox(width: double.infinity, height: 50, child: FilledButton(onPressed: () {
-              if(tController.text.isNotEmpty) {
-                // 시간 지정이 꺼져 있으면 00:00:00 으로 저장
-                final fs = isTimeEnabled ? start : DateTime(start.year, start.month, start.day);
-                final fe = isTimeEnabled ? end : DateTime(end.year, end.month, end.day).add(const Duration(days: 1));
-                final nt = Todo(
-                  id: existing?.id ?? const Uuid().v4(), 
-                  userId: authP.currentUser!.uid, 
-                  title: tController.text, 
-                  description: dController.text, 
-                  startDateTime: fs, 
-                  endDateTime: fe, 
-                  categories: selectedCats, 
-                  isCompleted: existing?.isCompleted ?? false, 
-                  reactions: existing?.reactions
-                );
-                if(existing == null) todoP.addTodo(nt); else todoP.updateTodo(nt);
-                Navigator.pop(context);
-              }
-            }, child: const Text('저장'))),
+            Row(
+              children: [
+                if(existing != null) ...[
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('일정 삭제'),
+                            content: const Text('이 일정을 삭제하시겠습니까?'),
+                            actions: [
+                              TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
+                              TextButton(
+                                onPressed: () {
+                                  todoP.deleteTodo(existing.id);
+                                  Navigator.pop(context); // 팝업 닫기
+                                  Navigator.pop(context); // 다이얼로그 닫기
+                                },
+                                child: const Text('삭제', style: TextStyle(color: Colors.red)),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                      child: const Text('삭제'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                Expanded(
+                  flex: 2,
+                  child: FilledButton(
+                    onPressed: () {
+                      if(tController.text.isNotEmpty) {
+                        // 시간 지정이 꺼져 있으면 00:00:00 으로 저장
+                        final fs = isTimeEnabled ? start : DateTime(start.year, start.month, start.day);
+                        final fe = isTimeEnabled ? end : DateTime(end.year, end.month, end.day).add(const Duration(days: 1));
+                        final nt = Todo(
+                          id: existing?.id ?? const Uuid().v4(), 
+                          userId: authP.currentUser!.uid, 
+                          title: tController.text, 
+                          description: dController.text, 
+                          startDateTime: fs, 
+                          endDateTime: fe, 
+                          categories: selectedCats, 
+                          isCompleted: existing?.isCompleted ?? false, 
+                          reactions: existing?.reactions
+                        );
+                        if(existing == null) todoP.addTodo(nt); else todoP.updateTodo(nt);
+                        Navigator.pop(context);
+                      }
+                    },
+                    child: Text(existing == null ? '저장' : '수정 완료'),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 20),
           ]),
         ),
@@ -144,10 +183,14 @@ class TodoItemTile extends StatelessWidget {
   const TodoItemTile({super.key, required this.todo, required this.onTap});
   @override
   Widget build(BuildContext context) {
+    final authP = context.read<AuthProvider>();
+    final isMe = todo.userId == authP.currentUser?.uid;
+    
     bool isAllDay = todo.startDateTime.hour == 0 && todo.startDateTime.minute == 0 && todo.endDateTime.hour == 0 && todo.endDateTime.minute == 0;
     final sStr = isAllDay ? DateFormat('M/d').format(todo.startDateTime) : DateFormat('M/d HH:mm').format(todo.startDateTime);
     final eStr = isAllDay ? DateFormat('M/d').format(todo.endDateTime.subtract(const Duration(seconds: 1))) : DateFormat('M/d HH:mm').format(todo.endDateTime);
-    return Dismissible(key: Key(todo.id), onDismissed: (_)=>context.read<TodoProvider>().deleteTodo(todo.id), child: Card(
+    
+    Widget content = Card(
       elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       child: ListTile(onTap: onTap, title: Row(children: [
         Expanded(child: Text(todo.title, style: TextStyle(decoration: todo.isCompleted ? TextDecoration.lineThrough : null, fontWeight: FontWeight.bold))),
@@ -156,6 +199,34 @@ class TodoItemTile extends StatelessWidget {
         if (todo.description.isNotEmpty) Text(todo.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.grey)),
         Text(isAllDay && todo.startDateTime.day == todo.endDateTime.subtract(const Duration(seconds: 1)).day ? sStr : '$sStr - $eStr', style: const TextStyle(fontSize: 12, color: Colors.indigo, fontWeight: FontWeight.bold)),
       ])),
-    ));
+    );
+
+    if (!isMe) return content;
+
+    return Dismissible(
+      key: Key(todo.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(15)),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      confirmDismiss: (direction) async {
+        return await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('일정 삭제'),
+            content: const Text('이 일정을 삭제하시겠습니까?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+              TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
+            ],
+          ),
+        );
+      },
+      onDismissed: (_) => context.read<TodoProvider>().deleteTodo(todo.id),
+      child: content,
+    );
   }
 }
