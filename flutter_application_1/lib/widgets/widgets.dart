@@ -48,20 +48,67 @@ void showAddEditTodoDialog(BuildContext context, {Todo? existing, DateTime? init
               selectedColor: cat.color.withOpacity(0.3),
             )).toList()),
             const SizedBox(height: 20),
-            ListTile(title: const Text('시작 날짜'), subtitle: Text(DateFormat('yyyy-MM-dd').format(start)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () async {
-              final d = await showDatePicker(context: context, initialDate: start, firstDate: DateTime(2020), lastDate: DateTime(2030));
-              if(d != null) setModalState(() => start = DateTime(d.year, d.month, d.day, start.hour, start.minute));
-            }),
-            if(isTimeEnabled) ListTile(title: const Text('시작 시간'), subtitle: Text(DateFormat('HH:mm').format(start)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
-              showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: start, onDateTimeChanged: (d)=>setModalState(()=>start=DateTime(start.year, start.month, start.day, d.hour, d.minute)))));
-            }),
-            ListTile(title: const Text('종료 날짜'), subtitle: Text(DateFormat('yyyy-MM-dd').format(end)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () async {
-              final d = await showDatePicker(context: context, initialDate: end, firstDate: DateTime(2020), lastDate: DateTime(2030));
-              if(d != null) setModalState(() => end = DateTime(d.year, d.month, d.day, end.hour, end.minute));
-            }),
-            if(isTimeEnabled) ListTile(title: const Text('종료 시간'), subtitle: Text(DateFormat('HH:mm').format(end)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
-              showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: end, onDateTimeChanged: (d)=>setModalState(()=>end=DateTime(end.year, end.month, end.day, d.hour, d.minute)))));
-            }),
+            const Text('시작 일시', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+            Row(
+              children: [
+                Expanded(
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(DateFormat('yyyy-MM-dd').format(start)),
+                    trailing: const Icon(Icons.calendar_today, size: 18),
+                    onTap: () async {
+                      final d = await showDatePicker(context: context, initialDate: start, firstDate: DateTime(2020), lastDate: DateTime(2030));
+                      if(d != null) setModalState(() => start = DateTime(d.year, d.month, d.day, start.hour, start.minute));
+                    },
+                  ),
+                ),
+                if(isTimeEnabled) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(DateFormat('HH:mm').format(start)),
+                      trailing: const Icon(Icons.access_time, size: 18),
+                      onTap: () {
+                        showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: start, onDateTimeChanged: (d)=>setModalState(()=>start=DateTime(start.year, start.month, start.day, d.hour, d.minute)))));
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+            const Text('종료 일시', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+            Row(
+              children: [
+                Expanded(
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(DateFormat('yyyy-MM-dd').format(end)),
+                    trailing: const Icon(Icons.calendar_today, size: 18),
+                    onTap: () async {
+                      final d = await showDatePicker(context: context, initialDate: end, firstDate: DateTime(2020), lastDate: DateTime(2030));
+                      if(d != null) setModalState(() => end = DateTime(d.year, d.month, d.day, end.hour, end.minute));
+                    },
+                  ),
+                ),
+                if(isTimeEnabled) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(DateFormat('HH:mm').format(end)),
+                      trailing: const Icon(Icons.access_time, size: 18),
+                      onTap: () {
+                        showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: end, onDateTimeChanged: (d)=>setModalState(()=>end=DateTime(end.year, end.month, end.day, d.hour, d.minute)))));
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const Divider(height: 1),
             const SizedBox(height: 30),
             SizedBox(width: double.infinity, height: 50, child: FilledButton(onPressed: () {
               if(tController.text.isNotEmpty) {
