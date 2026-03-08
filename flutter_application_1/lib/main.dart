@@ -10,8 +10,7 @@ import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-// ignore: uri_does_not_exist
-// import 'firebase_options.dart'; // Run 'flutterfire configure' to generate this file
+import 'firebase_options.dart'; 
 
 // --------------------------------------------------------------------------
 // 모델 정의
@@ -238,16 +237,18 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sendFriendRequest(String targetName) async {
+  Future<String> sendFriendRequest(String targetEmail) async {
     try {
-      final query = await _db.collection('users').where('name', isEqualTo: targetName).get();
-      if (query.docs.isEmpty) return;
+      if (targetEmail == _currentUser!.email) return '자기 자신에게는 요청을 보낼 수 없습니다.';
+
+      final query = await _db.collection('users').where('email', isEqualTo: targetEmail).get();
+      if (query.docs.isEmpty) return '해당 이메일을 가진 사용자를 찾을 수 없습니다.';
       
       final targetDoc = query.docs.first;
       final target = AppUser.fromMap(targetDoc.data());
       
-      if (target.uid == _currentUser!.uid) return;
-      if (target.incomingRequests.contains(_currentUser!.email) || target.friends.contains(_currentUser!.email)) return;
+      if (target.friends.contains(_currentUser!.email)) return '이미 친구 사이입니다.';
+      if (target.incomingRequests.contains(_currentUser!.email)) return '이미 요청을 보냈습니다.';
 
       await _db.collection('users').doc(target.uid).update({
         'incomingRequests': FieldValue.arrayUnion([_currentUser!.email])
@@ -261,13 +262,17 @@ class AuthProvider extends ChangeNotifier {
         type: 'friend_request',
         senderEmail: _currentUser!.email,
       ).toMap()..addAll({'targetUid': target.uid}));
-    } catch (_) {}
+      
+      return '성공';
+    } catch (e) {
+      return '요청 전송 실패: $e';
+    }
   }
 
-  Future<void> acceptFriendRequest(String senderEmail) async {
+  Future<String> acceptFriendRequest(String senderEmail) async {
     try {
       final senderQuery = await _db.collection('users').where('email', isEqualTo: senderEmail).get();
-      if (senderQuery.docs.isEmpty) return;
+      if (senderQuery.docs.isEmpty) return '보낸 사용자를 찾을 수 없습니다.';
       final senderDoc = senderQuery.docs.first;
       
       await _db.runTransaction((transaction) async {
@@ -284,7 +289,10 @@ class AuthProvider extends ChangeNotifier {
       final updated = await _db.collection('users').doc(_currentUser!.uid).get();
       _currentUser = AppUser.fromMap(updated.data()!);
       notifyListeners();
-    } catch (_) {}
+      return '성공';
+    } catch (e) {
+      return '수락 실패: $e';
+    }
   }
 }
 
@@ -388,9 +396,7 @@ class TodoProvider extends ChangeNotifier {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    // If you have firebase_options.dart, use:
-    // await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-    await Firebase.initializeApp(); 
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   } catch (e) {
     print("Firebase initialization failed: $e");
   }
@@ -925,13 +931,13 @@ class SettingsScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16.0),
               child: Row(
                 children: [
-                  Expanded(child: TextField(controller: nameController, decoration: const InputDecoration(hintText: '친구 이름 입력', border: InputBorder.none))),
+                  Expanded(child: TextField(controller: nameController, decoration: const InputDecoration(hintText: '친구 이메일 입력', border: InputBorder.none))),
                   IconButton.filledTonal(onPressed: () async {
                     if (nameController.text.isNotEmpty) {
-                      await authProvider.sendFriendRequest(nameController.text);
+                      final msg = await authProvider.sendFriendRequest(nameController.text.trim());
                       if(context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('친구 요청을 보냈습니다.')));
-                        nameController.clear();
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
+                        if (msg == '성공') nameController.clear();
                       }
                     }
                   }, icon: const Icon(Icons.person_add_alt_1)),
@@ -985,9 +991,12 @@ class NotificationScreen extends StatelessWidget {
                   trailing: n.type == 'friend_request' && !auth.currentUser!.friends.contains(n.senderEmail) ? Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      TextButton(onPressed: () {
-                        auth.acceptFriendRequest(n.senderEmail!);
-                        provider.markAsRead(n.id);
+                      TextButton(onPressed: () async {
+                        final msg = await auth.acceptFriendRequest(n.senderEmail!);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
+                          if (msg == '성공') provider.markAsRead(n.id);
+                        }
                       }, child: const Text('수락')),
                       TextButton(onPressed: () {
                         provider.markAsRead(n.id);
