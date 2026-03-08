@@ -274,21 +274,28 @@ class AuthProvider extends ChangeNotifier {
       final senderQuery = await _db.collection('users').where('email', isEqualTo: senderEmail).get();
       if (senderQuery.docs.isEmpty) return '보낸 사용자를 찾을 수 없습니다.';
       final senderDoc = senderQuery.docs.first;
-      final senderData = AppUser.fromMap(senderDoc.data());
+      final senderUid = senderDoc.id;
       
       await _db.runTransaction((transaction) async {
-        // 내 친구 목록에 상대방 추가, 요청 목록에서 제거
         transaction.update(_db.collection('users').doc(_currentUser!.uid), {
           'incomingRequests': FieldValue.arrayRemove([senderEmail]),
           'friends': FieldValue.arrayUnion([senderEmail])
         });
-        // 상대방 친구 목록에 나 추가
         transaction.update(senderDoc.reference, {
           'friends': FieldValue.arrayUnion([_currentUser!.email])
         });
       });
+
+      // 요청 보낸 사람에게 수락 알림 전송
+      await _db.collection('notifications').add(AppNotification(
+        id: const Uuid().v4(),
+        title: '친구 수락',
+        message: '${_currentUser!.name}님이 친구 요청을 수락했습니다.',
+        timestamp: DateTime.now(),
+        type: 'friend_accepted',
+        senderEmail: _currentUser!.email,
+      ).toMap()..addAll({'targetUid': senderUid}));
       
-      // 로컬 상태 갱신
       final updated = await _db.collection('users').doc(_currentUser!.uid).get();
       _currentUser = AppUser.fromMap(updated.data()!);
       notifyListeners();
@@ -303,13 +310,12 @@ class NotificationProvider extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   Stream<List<AppNotification>> getNotificationStream(String uid) {
-    // timestamp 정렬을 위해 인덱스가 필요할 수 있으므로, 에러 발생 시를 대비해 기본 스트림을 제공합니다.
     return _db.collection('notifications')
         .where('targetUid', isEqualTo: uid)
         .snapshots()
         .map((snap) {
           var list = snap.docs.map((doc) => AppNotification.fromMap(doc.data())).toList();
-          list.sort((a, b) => b.timestamp.compareTo(a.timestamp)); // 메모리 내 정렬로 변경하여 인덱스 에러 방지
+          list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
           return list;
         });
   }
@@ -319,6 +325,15 @@ class NotificationProvider extends ChangeNotifier {
     if (query.docs.isNotEmpty) {
       await query.docs.first.reference.update({'isRead': true});
     }
+  }
+
+  Future<void> deleteAllNotifications(String uid) async {
+    final query = await _db.collection('notifications').where('targetUid', isEqualTo: uid).get();
+    final batch = _db.batch();
+    for (var doc in query.docs) {
+      batch.delete(doc.reference);
+    }
+    await batch.commit();
   }
 }
 
@@ -971,7 +986,16 @@ class NotificationScreen extends StatelessWidget {
     final provider = context.watch<NotificationProvider>();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('알림', style: TextStyle(fontWeight: FontWeight.bold)), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('알림', style: TextStyle(fontWeight: FontWeight.bold)), 
+        centerTitle: true,
+        actions: [
+          TextButton(
+            onPressed: () => provider.deleteAllNotifications(auth.currentUser!.uid),
+            child: const Text('전체 삭제', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
       body: StreamBuilder<List<AppNotification>>(
         stream: provider.getNotificationStream(auth.currentUser!.uid),
         builder: (context, snapshot) {
@@ -983,8 +1007,9 @@ class NotificationScreen extends StatelessWidget {
             itemBuilder: (c, i) {
               final n = notifications[i];
               return Card(
-                elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.1))),
-                color: n.isRead ? null : Theme.of(context).primaryColor.withOpacity(0.05),
+                elevation: 0, 
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                color: n.isRead ? Colors.white : Theme.of(context).primaryColor.withOpacity(0.05),
                 child: ListTile(
                   title: Text(n.title, style: TextStyle(fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold)),
                   subtitle: Column(
@@ -995,20 +1020,15 @@ class NotificationScreen extends StatelessWidget {
                       Text(DateFormat('MM/dd HH:mm').format(n.timestamp), style: const TextStyle(fontSize: 10, color: Colors.grey)),
                     ],
                   ),
-                  trailing: n.type == 'friend_request' && !auth.currentUser!.friends.contains(n.senderEmail) ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextButton(onPressed: () async {
-                        final msg = await auth.acceptFriendRequest(n.senderEmail!);
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
-                          if (msg == '성공') provider.markAsRead(n.id);
-                        }
-                      }, child: const Text('수락')),
-                      TextButton(onPressed: () {
-                        provider.markAsRead(n.id);
-                      }, style: TextButton.styleFrom(foregroundColor: Colors.red), child: const Text('삭제')),
-                    ],
+                  trailing: n.type == 'friend_request' && !auth.currentUser!.friends.contains(n.senderEmail) ? TextButton(
+                    onPressed: () async {
+                      final msg = await auth.acceptFriendRequest(n.senderEmail!);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
+                        if (msg == '성공') provider.markAsRead(n.id);
+                      }
+                    }, 
+                    child: const Text('수락'),
                   ) : null,
                   onTap: () => provider.markAsRead(n.id),
                 ),
@@ -1134,7 +1154,7 @@ class TodoItemTile extends StatelessWidget {
       onDismissed: (d) => context.read<TodoProvider>().deleteTodo(todo.id),
       child: Card(
         elevation: 0, margin: const EdgeInsets.only(bottom: 12), 
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.1))),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         child: ListTile(
           onTap: onTap,
           leading: Checkbox(value: todo.isCompleted, onChanged: (v) => context.read<TodoProvider>().toggleTodo(todo)),
