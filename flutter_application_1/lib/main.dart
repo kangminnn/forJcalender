@@ -56,6 +56,7 @@ class AppNotification {
   final DateTime timestamp;
   final String type;
   final String? senderEmail;
+  final String? todoId; // 추가: 반응이 달린 일정 ID
   bool isRead;
 
   AppNotification({
@@ -65,6 +66,7 @@ class AppNotification {
     required this.timestamp,
     required this.type,
     this.senderEmail,
+    this.todoId,
     this.isRead = false,
   });
 
@@ -75,6 +77,7 @@ class AppNotification {
     'timestamp': timestamp.toIso8601String(),
     'type': type,
     'senderEmail': senderEmail,
+    'todoId': todoId,
     'isRead': isRead,
   };
 
@@ -85,6 +88,7 @@ class AppNotification {
     timestamp: DateTime.parse(map['timestamp']),
     type: map['type'],
     senderEmail: map['senderEmail'],
+    todoId: map['todoId'],
     isRead: map['isRead'] ?? false,
   );
 }
@@ -117,6 +121,7 @@ class Todo {
   DateTime endDateTime;
   List<TodoCategory> categories;
   bool isCompleted;
+  Map<String, String> reactions; // { 'userUid': 'emoji' }
 
   Todo({
     required this.id,
@@ -127,7 +132,8 @@ class Todo {
     required this.endDateTime,
     required this.categories,
     this.isCompleted = false,
-  });
+    Map<String, String>? reactions,
+  }) : reactions = reactions ?? {};
 
   Map<String, dynamic> toMap() => {
     'id': id,
@@ -138,6 +144,7 @@ class Todo {
     'endDateTime': endDateTime.toIso8601String(),
     'categories': categories.map((c) => c.toJson()).toList(),
     'isCompleted': isCompleted,
+    'reactions': reactions,
   };
 
   factory Todo.fromMap(Map<String, dynamic> map) => Todo(
@@ -149,7 +156,21 @@ class Todo {
     endDateTime: DateTime.parse(map['endDateTime']),
     categories: (map['categories'] as List).map((c) => TodoCategory.fromJson(c)).toList(),
     isCompleted: map['isCompleted'] ?? false,
+    reactions: Map<String, String>.from(map['reactions'] ?? {}),
   );
+}
+
+class UserTask {
+  final String id;
+  final String userId;
+  String title;
+  String description;
+  bool isCompleted;
+
+  UserTask({required this.id, required this.userId, required this.title, this.description = '', this.isCompleted = false});
+
+  Map<String, dynamic> toMap() => {'id': id, 'userId': userId, 'title': title, 'description': description, 'isCompleted': isCompleted};
+  factory UserTask.fromMap(Map<String, dynamic> map) => UserTask(id: map['id'], userId: map['userId'], title: map['title'], description: map['description'] ?? '', isCompleted: map['isCompleted'] ?? false);
 }
 
 // --------------------------------------------------------------------------
@@ -159,18 +180,13 @@ class Todo {
 class ThemeProvider extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.light;
   ThemeMode get themeMode => _themeMode;
-
-  ThemeProvider() {
-    _loadTheme();
-  }
-
+  ThemeProvider() { _loadTheme(); }
   void toggleTheme() async {
     _themeMode = _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('themeMode', _themeMode.toString());
   }
-
   void _loadTheme() async {
     final prefs = await SharedPreferences.getInstance();
     final mode = prefs.getString('themeMode');
@@ -185,7 +201,6 @@ class AuthProvider extends ChangeNotifier {
   AppUser? _currentUser;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
-
   AppUser? get currentUser => _currentUser;
   bool get isAuthenticated => _currentUser != null;
 
@@ -193,284 +208,193 @@ class AuthProvider extends ChangeNotifier {
     _auth.authStateChanges().listen((user) async {
       if (user != null) {
         final doc = await _db.collection('users').doc(user.uid).get();
-        if (doc.exists) {
-          _currentUser = AppUser.fromMap(doc.data()!);
-        }
-      } else {
-        _currentUser = null;
-      }
+        if (doc.exists) _currentUser = AppUser.fromMap(doc.data()!);
+      } else { _currentUser = null; }
       notifyListeners();
     });
   }
 
   Future<String?> signUp(String email, String password, String name) async {
     try {
-      final res = await _auth.createUserWithEmailAndPassword(email: email, password: password);
-      final newUser = AppUser(uid: res.user!.uid, email: email, name: name);
+      final res = await _auth.createUserWithEmailAndPassword(email: email.trim(), password: password);
+      final newUser = AppUser(uid: res.user!.uid, email: email.trim(), name: name.trim());
       await _db.collection('users').doc(res.user!.uid).set(newUser.toMap());
       _currentUser = newUser;
       notifyListeners();
       return null;
-    } catch (e) {
-      return e.toString();
-    }
+    } catch (e) { return e.toString(); }
   }
 
-  Future<String?> login(String loginKey, String password) async {
+  Future<String?> login(String email, String password) async {
     try {
-      String email = loginKey.trim();
-      if (!email.contains('@')) {
-        final nameQuery = await _db.collection('users').where('name', isEqualTo: email).get();
-        if (nameQuery.docs.isEmpty) return '해당 이름을 가진 사용자를 찾을 수 없습니다.';
-        email = nameQuery.docs.first.data()['email'];
-      }
-
-      final res = await _auth.signInWithEmailAndPassword(email: email, password: password);
-      final doc = await _db.collection('users').doc(res.user!.uid).get();
+      await _auth.signInWithEmailAndPassword(email: email.trim(), password: password);
+      final doc = await _db.collection('users').doc(_auth.currentUser!.uid).get();
       if (doc.exists) {
         _currentUser = AppUser.fromMap(doc.data()!);
         notifyListeners();
         return null;
       }
       return '사용자 정보를 찾을 수 없습니다.';
-    } catch (e) {
-      return '로그인 정보가 올바르지 않습니다.';
-    }
+    } catch (e) { return '로그인 정보가 틀렸습니다.'; }
   }
 
-  void logout() async {
-    await _auth.signOut();
-    _currentUser = null;
-    notifyListeners();
-  }
+  void logout() async { await _auth.signOut(); _currentUser = null; notifyListeners(); }
 
   Future<String> sendFriendRequest(String targetName) async {
     try {
       if (targetName == _currentUser!.name) return '자기 자신에게는 요청을 보낼 수 없습니다.';
-
       final query = await _db.collection('users').where('name', isEqualTo: targetName).get();
-      if (query.docs.isEmpty) return '해당 이름을 가진 사용자를 찾을 수 없습니다.';
-      
-      final targetDoc = query.docs.first;
-      final target = AppUser.fromMap(targetDoc.data());
-      
-      if (target.friends.contains(_currentUser!.email)) return '이미 친구 사이입니다.';
-      if (target.incomingRequests.contains(_currentUser!.email)) return '이미 요청을 보냈습니다.';
-
-      await _db.collection('users').doc(target.uid).update({
-        'incomingRequests': FieldValue.arrayUnion([_currentUser!.email])
-      });
-
-      await _db.collection('notifications').add(AppNotification(
-        id: const Uuid().v4(),
-        title: '친구 요청',
-        message: '${_currentUser!.name}님이 친구 요청을 보냈습니다.',
-        timestamp: DateTime.now(),
-        type: 'friend_request',
-        senderEmail: _currentUser!.email,
-      ).toMap()..addAll({'targetUid': target.uid}));
-      
+      if (query.docs.isEmpty) return '사용자를 찾을 수 없습니다.';
+      final target = AppUser.fromMap(query.docs.first.data());
+      if (target.friends.contains(_currentUser!.email)) return '이미 친구입니다.';
+      await _db.collection('users').doc(target.uid).update({'incomingRequests': FieldValue.arrayUnion([_currentUser!.email])});
+      await _db.collection('notifications').add(AppNotification(id: const Uuid().v4(), title: '친구 요청', message: '${_currentUser!.name}님이 친구 요청을 보냈습니다.', timestamp: DateTime.now(), type: 'friend_request', senderEmail: _currentUser!.email).toMap()..addAll({'targetUid': target.uid}));
       return '성공';
-    } catch (e) {
-      return '요청 전송 실패: $e';
-    }
+    } catch (e) { return '실패: $e'; }
   }
 
   Future<String> acceptFriendRequest(String senderEmail) async {
     try {
-      final senderQuery = await _db.collection('users').where('email', isEqualTo: senderEmail).get();
-      if (senderQuery.docs.isEmpty) return '보낸 사용자를 찾을 수 없습니다.';
-      final senderDoc = senderQuery.docs.first;
-      final senderData = AppUser.fromMap(senderDoc.data());
-      final senderUid = senderDoc.id;
-      
-      await _db.runTransaction((transaction) async {
-        transaction.update(_db.collection('users').doc(_currentUser!.uid), {
-          'incomingRequests': FieldValue.arrayRemove([senderEmail]),
-          'friends': FieldValue.arrayUnion([senderEmail])
-        });
-        transaction.update(senderDoc.reference, {
-          'friends': FieldValue.arrayUnion([_currentUser!.email])
-        });
+      final query = await _db.collection('users').where('email', isEqualTo: senderEmail).get();
+      if (query.docs.isEmpty) return '사용자를 찾을 수 없습니다.';
+      final senderDoc = query.docs.first;
+      await _db.runTransaction((tx) async {
+        tx.update(_db.collection('users').doc(_currentUser!.uid), {'incomingRequests': FieldValue.arrayRemove([senderEmail]), 'friends': FieldValue.arrayUnion([senderEmail])});
+        tx.update(senderDoc.reference, {'friends': FieldValue.arrayUnion([_currentUser!.email])});
       });
-
-      // 상대방에게 알림 전송
-      await _db.collection('notifications').add(AppNotification(
-        id: const Uuid().v4(),
-        title: '친구 성사',
-        message: '${_currentUser!.name}님과 친구가 되었습니다.',
-        timestamp: DateTime.now(),
-        type: 'friend_accepted',
-        senderEmail: _currentUser!.email,
-      ).toMap()..addAll({'targetUid': senderUid}));
-
-      // 나에게 알림 전송
-      await _db.collection('notifications').add(AppNotification(
-        id: const Uuid().v4(),
-        title: '친구 성사',
-        message: '${senderData.name}님과 친구가 되었습니다.',
-        timestamp: DateTime.now(),
-        type: 'friend_accepted',
-        senderEmail: senderEmail,
-      ).toMap()..addAll({'targetUid': _currentUser!.uid}));
-      
+      await _db.collection('notifications').add(AppNotification(id: const Uuid().v4(), title: '친구 성사', message: '${_currentUser!.name}님과 친구가 되었습니다.', timestamp: DateTime.now(), type: 'friend_accepted', senderEmail: _currentUser!.email).toMap()..addAll({'targetUid': senderDoc.id}));
+      await _db.collection('notifications').add(AppNotification(id: const Uuid().v4(), title: '친구 성사', message: '${AppUser.fromMap(senderDoc.data()).name}님과 친구가 되었습니다.', timestamp: DateTime.now(), type: 'friend_accepted', senderEmail: senderEmail).toMap()..addAll({'targetUid': _currentUser!.uid}));
       final updated = await _db.collection('users').doc(_currentUser!.uid).get();
       _currentUser = AppUser.fromMap(updated.data()!);
       notifyListeners();
       return '성공';
-    } catch (e) {
-      return '수락 실패: $e';
-    }
+    } catch (e) { return '실패: $e'; }
   }
 
   Future<void> removeFriend(String friendEmail) async {
-    try {
-      final friendQuery = await _db.collection('users').where('email', isEqualTo: friendEmail).get();
-      if (friendQuery.docs.isEmpty) return;
-      final friendDoc = friendQuery.docs.first;
-
-      await _db.runTransaction((transaction) async {
-        transaction.update(_db.collection('users').doc(_currentUser!.uid), {
-          'friends': FieldValue.arrayRemove([friendEmail])
-        });
-        transaction.update(friendDoc.reference, {
-          'friends': FieldValue.arrayRemove([_currentUser!.email])
-        });
+    final query = await _db.collection('users').where('email', isEqualTo: friendEmail).get();
+    if (query.docs.isNotEmpty) {
+      await _db.runTransaction((tx) async {
+        tx.update(_db.collection('users').doc(_currentUser!.uid), {'friends': FieldValue.arrayRemove([friendEmail])});
+        tx.update(query.docs.first.reference, {'friends': FieldValue.arrayRemove([_currentUser!.email])});
       });
-
       final updated = await _db.collection('users').doc(_currentUser!.uid).get();
       _currentUser = AppUser.fromMap(updated.data()!);
       notifyListeners();
-    } catch (_) {}
+    }
   }
 
   Future<String?> deleteAccount() async {
     try {
       final user = _auth.currentUser;
-      if (user == null) return '로그인 정보가 없습니다.';
-
-      // 1. 모든 일정 삭제
+      if (user == null) return '로그인 필요';
       final todos = await _db.collection('todos').where('userId', isEqualTo: user.uid).get();
-      for (var doc in todos.docs) await doc.reference.delete();
-
-      // 2. 모든 알림 삭제
-      final notifs = await _db.collection('notifications').where('targetUid', isEqualTo: user.uid).get();
-      for (var doc in notifs.docs) await doc.reference.delete();
-
-      // 3. 친구들의 목록에서 나를 제거
-      for (var friendEmail in _currentUser!.friends) {
-        final fQuery = await _db.collection('users').where('email', isEqualTo: friendEmail).get();
-        if (fQuery.docs.isNotEmpty) {
-          await fQuery.docs.first.reference.update({
-            'friends': FieldValue.arrayRemove([_currentUser!.email])
-          });
-        }
-      }
-
-      // 4. 사용자 문서 삭제 및 계정 삭제
+      for (var d in todos.docs) await d.reference.delete();
+      final tasks = await _db.collection('tasks').where('userId', isEqualTo: user.uid).get();
+      for (var d in tasks.docs) await d.reference.delete();
       await _db.collection('users').doc(user.uid).delete();
       await user.delete();
-      
       _currentUser = null;
       notifyListeners();
       return null;
-    } catch (e) {
-      return '회원 탈퇴 실패: $e (최근 로그인 기록이 필요할 수 있습니다.)';
-    }
+    } catch (e) { return e.toString(); }
   }
 }
 
 class NotificationProvider extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
-
   Stream<List<AppNotification>> getNotificationStream(String uid) {
-    return _db.collection('notifications')
-        .where('targetUid', isEqualTo: uid)
-        .snapshots()
-        .map((snap) {
-          var list = snap.docs.map((doc) => AppNotification.fromMap(doc.data())).toList();
-          list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-          return list;
-        });
+    return _db.collection('notifications').where('targetUid', isEqualTo: uid).snapshots().map((snap) {
+      var list = snap.docs.map((doc) => AppNotification.fromMap(doc.data())).toList();
+      list.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      return list;
+    });
   }
-
-  Future<void> markAsRead(String notifId) async {
-    final query = await _db.collection('notifications').where('id', isEqualTo: notifId).get();
-    if (query.docs.isNotEmpty) {
-      await query.docs.first.reference.update({'isRead': true});
-    }
+  Future<void> markAsRead(String id) async {
+    final q = await _db.collection('notifications').where('id', isEqualTo: id).get();
+    if (q.docs.isNotEmpty) await q.docs.first.reference.update({'isRead': true});
   }
-
   Future<void> deleteAllNotifications(String uid) async {
-    final query = await _db.collection('notifications').where('targetUid', isEqualTo: uid).get();
-    final batch = _db.batch();
-    for (var doc in query.docs) {
-      batch.delete(doc.reference);
-    }
-    await batch.commit();
+    final q = await _db.collection('notifications').where('targetUid', isEqualTo: uid).get();
+    final b = _db.batch();
+    for (var d in q.docs) b.delete(d.reference);
+    await b.commit();
   }
+}
+
+class TaskProvider extends ChangeNotifier {
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  Stream<List<UserTask>> getTaskStream(String uid) => _db.collection('tasks').where('userId', isEqualTo: uid).snapshots().map((s) => s.docs.map((d) => UserTask.fromMap(d.data())).toList());
+  Future<void> addTask(UserTask t) async => await _db.collection('tasks').doc(t.id).set(t.toMap());
+  Future<void> updateTask(UserTask t) async => await _db.collection('tasks').doc(t.id).update(t.toMap());
+  Future<void> deleteTask(String id) async => await _db.collection('tasks').doc(id).delete();
+  Future<void> toggleTask(UserTask t) async => await _db.collection('tasks').doc(t.id).update({'isCompleted': !t.isCompleted});
 }
 
 class TodoProvider extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
-  List<TodoCategory> _categories = [
-    TodoCategory(id: '1', label: '업무', color: Colors.indigo),
-    TodoCategory(id: '2', label: '개인', color: Colors.teal),
-    TodoCategory(id: '3', label: '취미', color: Colors.orange),
-  ];
-  
+  List<TodoCategory> _categories = [];
   List<TodoCategory> get categories => _categories;
 
-  TodoProvider() {
-    _loadCategories();
-  }
-
-  void _loadCategories() async {
-    final prefs = await SharedPreferences.getInstance();
-    final json = prefs.getString('categories');
-    if (json != null) {
-      _categories = (jsonDecode(json) as List).map((c) => TodoCategory.fromJson(c)).toList();
+  // 사용자별 카테고리 불러오기 (데이터 없으면 초기화)
+  Future<void> loadCategories(String uid) async {
+    try {
+      final snapshot = await _db.collection('users').doc(uid).collection('categories').get();
+      
+      if (snapshot.docs.isEmpty) {
+        // 기본 카테고리 초기 설정
+        final defaultCats = [
+          TodoCategory(id: '1', label: '업무', color: Colors.indigo),
+          TodoCategory(id: '2', label: '개인', color: Colors.teal),
+          TodoCategory(id: '3', label: '취미', color: Colors.orange),
+        ];
+        for (var cat in defaultCats) {
+          await _db.collection('users').doc(uid).collection('categories').doc(cat.id).set(cat.toJson());
+        }
+        _categories = defaultCats;
+      } else {
+        _categories = snapshot.docs.map((doc) => TodoCategory.fromJson(doc.data())).toList();
+      }
       notifyListeners();
+    } catch (e) {
+      print("카테고리 로딩 실패: $e");
     }
   }
 
-  Future<void> _saveCategories() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('categories', jsonEncode(_categories.map((c) => c.toJson()).toList()));
+  Stream<List<Todo>> getTodoStream(String uid) => _db.collection('todos').where('userId', isEqualTo: uid).snapshots().map((s) => s.docs.map((d) => Todo.fromMap(d.data())).toList());
+  
+  Future<void> addTodo(Todo t) async => await _db.collection('todos').doc(t.id).set(t.toMap());
+  Future<void> updateTodo(Todo t) async => await _db.collection('todos').doc(t.id).update(t.toMap());
+  Future<void> deleteTodo(String id) async => await _db.collection('todos').doc(id).delete();
+  Future<void> toggleTodo(Todo t) async => await _db.collection('todos').doc(t.id).update({'isCompleted': !t.isCompleted});
+  Future<void> addReaction(Todo todo, String senderUid, String senderName, String emoji) async {
+    // 1. 이모지 업데이트
+    await _db.collection('todos').doc(todo.id).update({'reactions.$senderUid': emoji});
+
+    // 2. 일정 소유자에게 알림 전송 (본인이 본인에게 남긴 경우는 제외)
+    if (todo.userId != senderUid) {
+      await _db.collection('notifications').add(AppNotification(
+        id: const Uuid().v4(),
+        title: '새로운 반응',
+        message: '$senderName님이 "${todo.title}" 일정에 $emoji 반응을 남겼습니다.',
+        timestamp: DateTime.now(),
+        type: 'emoji_reaction',
+        senderEmail: senderName, // 여기서는 이름을 보냄
+        todoId: todo.id,
+      ).toMap()..addAll({'targetUid': todo.userId}));
+    }
   }
 
-  Stream<List<Todo>> getTodoStream(String uid) {
-    return _db.collection('todos')
-        .where('userId', isEqualTo: uid)
-        .snapshots()
-        .map((snap) => snap.docs.map((doc) => Todo.fromMap(doc.data())).toList());
-  }
-
-  Future<void> addTodo(Todo todo) async {
-    await _db.collection('todos').doc(todo.id).set(todo.toMap());
-  }
-
-  Future<void> updateTodo(Todo todo) async {
-    await _db.collection('todos').doc(todo.id).update(todo.toMap());
-  }
-
-  Future<void> deleteTodo(String id) async {
-    await _db.collection('todos').doc(id).delete();
-  }
-
-  Future<void> toggleTodo(Todo todo) async {
-    await _db.collection('todos').doc(todo.id).update({'isCompleted': !todo.isCompleted});
-  }
-
-  void addCategory(String label, Color color) {
-    _categories.add(TodoCategory(id: const Uuid().v4(), label: label, color: color));
-    _saveCategories();
+  Future<void> addCategory(String uid, String label, Color color) async {
+    final newCat = TodoCategory(id: const Uuid().v4(), label: label, color: color);
+    await _db.collection('users').doc(uid).collection('categories').doc(newCat.id).set(newCat.toJson());
+    _categories.add(newCat);
     notifyListeners();
   }
 
-  void deleteCategory(String id) {
+  Future<void> deleteCategory(String uid, String id) async {
+    await _db.collection('users').doc(uid).collection('categories').doc(id).delete();
     _categories.removeWhere((c) => c.id == id);
-    _saveCategories();
     notifyListeners();
   }
 
@@ -478,66 +402,45 @@ class TodoProvider extends ChangeNotifier {
     final target = DateTime(date.year, date.month, date.day);
     return source.where((t) {
       final start = DateTime(t.startDateTime.year, t.startDateTime.month, t.startDateTime.day);
-      final end = DateTime(t.endDateTime.year, t.endDateTime.month, t.endDateTime.day);
-      return (target.isAtSameMomentAs(start) || target.isAtSameMomentAs(end)) ||
-             (target.isAfter(start) && target.isBefore(end));
+      final end = DateTime(t.endDateTime.year, t.endDateTime.month, t.endDateTime.day).add(const Duration(seconds: 1));
+      return (target.isAtSameMomentAs(start) || (target.isAfter(start) && target.isBefore(end)));
     }).toList();
   }
 }
 
 // --------------------------------------------------------------------------
-// 메인 앱
+// 앱 메인 & UI
 // --------------------------------------------------------------------------
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  } catch (e) {
-    print("Firebase initialization failed: $e");
-  }
-
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await initializeDateFormatting();
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => ThemeProvider()),
-        ChangeNotifierProvider(create: (_) => AuthProvider()),
-        ChangeNotifierProvider(create: (_) => TodoProvider()),
-        ChangeNotifierProvider(create: (_) => NotificationProvider()),
-      ],
-      child: const CalendarApp(),
-    ),
-  );
+  runApp(MultiProvider(
+    providers: [
+      ChangeNotifierProvider(create: (_) => ThemeProvider()),
+      ChangeNotifierProvider(create: (_) => AuthProvider()),
+      ChangeNotifierProvider(create: (_) => TodoProvider()),
+      ChangeNotifierProvider(create: (_) => NotificationProvider()),
+      ChangeNotifierProvider(create: (_) => TaskProvider()),
+    ],
+    child: const CalendarApp(),
+  ));
 }
 
 class CalendarApp extends StatelessWidget {
   const CalendarApp({super.key});
-
   @override
   Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
+    final tp = context.watch<ThemeProvider>();
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'J-Calendar',
-      themeMode: themeProvider.themeMode,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo, primary: Colors.indigo, brightness: Brightness.light),
-        scaffoldBackgroundColor: const Color(0xFFF5F7FA),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo, primary: Colors.indigo, brightness: Brightness.dark),
-      ),
+      debugShowCheckedModeBanner: false, title: 'J-Calendar', themeMode: tp.themeMode,
+      theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo, primary: Colors.indigo), scaffoldBackgroundColor: const Color(0xFFF5F7FA)),
+      darkTheme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo, primary: Colors.indigo, brightness: Brightness.dark)),
       home: context.watch<AuthProvider>().isAuthenticated ? const MainNavigationScreen() : const LoginScreen(),
     );
   }
 }
-
-// --------------------------------------------------------------------------
-// 로그인 & 회원가입 화면
-// --------------------------------------------------------------------------
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -546,52 +449,31 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final emailController = TextEditingController();
-  final passwordController = TextEditingController();
-
+  final eController = TextEditingController();
+  final pController = TextEditingController();
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF667EEA), Color(0xFF764BA2)]),
-        ),
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(30.0),
-            child: Card(
-              elevation: 10,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.calendar_today_rounded, size: 60, color: Colors.indigo),
-                    const SizedBox(height: 16),
-                    const Text('J-Calendar', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.indigo)),
-                    const SizedBox(height: 8),
-                    Text('당신의 하루를 기록하세요', style: TextStyle(color: Colors.grey[600])),
-                    const SizedBox(height: 40),
-                    TextField(controller: emailController, decoration: InputDecoration(labelText: '이메일 또는 이름', prefixIcon: const Icon(Icons.person_outline), border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
-                    const SizedBox(height: 16),
-                    TextField(controller: passwordController, obscureText: true, decoration: InputDecoration(labelText: '비밀번호', prefixIcon: const Icon(Icons.lock_outline), border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
-                    const SizedBox(height: 32),
-                    SizedBox(
-                      width: double.infinity, height: 55,
-                      child: FilledButton(onPressed: () async {
-                        final err = await context.read<AuthProvider>().login(emailController.text, passwordController.text);
-                        if(err != null && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err), backgroundColor: Colors.redAccent));
-                      }, style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))), child: const Text('로그인', style: TextStyle(fontSize: 18))),
-                    ),
-                    const SizedBox(height: 16),
-                    TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c)=>const SignUpScreen())), child: const Text('새로운 계정 만들기')),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+        decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF667EEA), Color(0xFF764BA2)])),
+        child: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(30), child: Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40), child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.calendar_today, size: 60, color: Colors.indigo),
+            const SizedBox(height: 16),
+            const Text('J-Calendar', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.indigo)),
+            const SizedBox(height: 40),
+            TextField(controller: eController, decoration: InputDecoration(labelText: '이메일', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+            const SizedBox(height: 16),
+            TextField(controller: pController, obscureText: true, decoration: InputDecoration(labelText: '비밀번호', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+            const SizedBox(height: 32),
+            SizedBox(width: double.infinity, height: 55, child: FilledButton(onPressed: () async {
+              final err = await context.read<AuthProvider>().login(eController.text, pController.text);
+              if(err != null && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+            }, child: const Text('로그인'))),
+            TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c)=>const SignUpScreen())), child: const Text('계정 만들기')),
+          ])),
+        ))),
       ),
     );
   }
@@ -604,53 +486,37 @@ class SignUpScreen extends StatefulWidget {
 }
 
 class _SignUpScreenState extends State<SignUpScreen> {
-  final nameController = TextEditingController();
-  final emailController = TextEditingController();
-  final passwordController = TextEditingController();
-
+  final nController = TextEditingController();
+  final eController = TextEditingController();
+  final pController = TextEditingController();
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0),
-      extendBodyBehindAppBar: true,
+      appBar: AppBar(backgroundColor: Colors.transparent), extendBodyBehindAppBar: true,
       body: Container(
-        decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF667EEA), Color(0xFF764BA2)])),
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(30),
-            child: Card(
-              elevation: 10, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    const Text('회원가입', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.indigo)),
-                    const SizedBox(height: 30),
-                    TextField(controller: nameController, decoration: InputDecoration(labelText: '이름', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
-                    const SizedBox(height: 16),
-                    TextField(controller: emailController, decoration: InputDecoration(labelText: '이메일', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
-                    const SizedBox(height: 16),
-                    TextField(controller: passwordController, obscureText: true, decoration: InputDecoration(labelText: '비밀번호', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
-                    const SizedBox(height: 32),
-                    SizedBox(width: double.infinity, height: 55, child: FilledButton(onPressed: () async {
-                      final err = await context.read<AuthProvider>().signUp(emailController.text, passwordController.text, nameController.text);
-                      if(err == null && mounted) Navigator.pop(context);
-                      else if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err!)));
-                    }, child: const Text('가입하기'))),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+        decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF667EEA), Color(0xFF764BA2)])),
+        child: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(30), child: Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+          child: Padding(padding: const EdgeInsets.all(24), child: Column(children: [
+            const Text('회원가입', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.indigo)),
+            const SizedBox(height: 30),
+            TextField(controller: nController, decoration: InputDecoration(labelText: '이름', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+            const SizedBox(height: 16),
+            TextField(controller: eController, decoration: InputDecoration(labelText: '이메일', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+            const SizedBox(height: 16),
+            TextField(controller: pController, obscureText: true, decoration: InputDecoration(labelText: '비밀번호', border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)))),
+            const SizedBox(height: 32),
+            SizedBox(width: double.infinity, height: 55, child: FilledButton(onPressed: () async {
+              final err = await context.read<AuthProvider>().signUp(eController.text, pController.text, nController.text);
+              if(err == null && mounted) Navigator.pop(context);
+              else if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err!)));
+            }, child: const Text('가입하기'))),
+          ])),
+        ))),
       ),
     );
   }
 }
-
-// --------------------------------------------------------------------------
-// 메인 내비게이션
-// --------------------------------------------------------------------------
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -659,28 +525,121 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  int _currentIndex = 0;
-  final List<Widget> _screens = [const CalendarScreen(), const TodoListScreen()];
+  int _idx = 0;
+  bool _initialized = false;
+  final _screens = [const CalendarScreen(), const TodoListScreen(), const TaskScreen()];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_initialized) {
+      final user = context.read<AuthProvider>().currentUser;
+      if (user != null) {
+        context.read<TodoProvider>().loadCategories(user.uid);
+        _initialized = true;
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _screens[_currentIndex],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (i) => setState(() => _currentIndex = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.calendar_month_outlined), label: '캘린더'),
-          NavigationDestination(icon: Icon(Icons.checklist_outlined), label: '일정'),
-        ],
-      ),
+      body: _screens[_idx],
+      bottomNavigationBar: NavigationBar(selectedIndex: _idx, onDestinationSelected: (i)=>setState(()=>_idx=i), destinations: const [
+        NavigationDestination(icon: Icon(Icons.calendar_month), label: '캘린더'),
+        NavigationDestination(icon: Icon(Icons.checklist), label: '일정'),
+        NavigationDestination(icon: Icon(Icons.task_alt), label: '할 일'),
+      ]),
     );
   }
 }
 
 // --------------------------------------------------------------------------
-// 캘린더 화면
+// 공통 UI 컴포넌트
 // --------------------------------------------------------------------------
+
+void showAddEditTodoDialog(BuildContext context, {Todo? existing, DateTime? initial}) {
+  final tController = TextEditingController(text: existing?.title);
+  final dController = TextEditingController(text: existing?.description);
+  final todoP = context.read<TodoProvider>();
+  final authP = context.read<AuthProvider>();
+  List<TodoCategory> selectedCats = List.from(existing?.categories ?? []);
+  
+  bool isAllDay = existing != null && 
+                  existing.startDateTime.hour == 0 && existing.startDateTime.minute == 0 &&
+                  existing.endDateTime.hour == 0 && existing.endDateTime.minute == 0;
+
+  DateTime start = existing?.startDateTime ?? initial ?? DateTime.now();
+  DateTime end = existing?.endDateTime ?? start.add(const Duration(hours: 1));
+
+  showModalBottomSheet(
+    context: context, isScrollControlled: true, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+    builder: (context) => StatefulBuilder(
+      builder: (context, setModalState) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 24, right: 24, top: 24),
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text(existing == null ? '일정 추가' : '일정 수정', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              Row(children: [
+                const Text('시간 미지정', style: TextStyle(fontSize: 12)),
+                Switch(value: isAllDay, onChanged: (v)=>setModalState(()=>isAllDay=v)),
+              ]),
+            ]),
+            const SizedBox(height: 20),
+            TextField(controller: tController, decoration: const InputDecoration(hintText: '제목')),
+            TextField(controller: dController, decoration: const InputDecoration(hintText: '내용')),
+            const SizedBox(height: 20),
+            const Text('카테고리', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, children: todoP.categories.map((cat) => FilterChip(
+              label: Text(cat.label), 
+              selected: selectedCats.any((c) => c.id == cat.id), 
+              onSelected: (v) => setModalState(() { if(v) selectedCats.add(cat); else selectedCats.removeWhere((c) => c.id == cat.id); }),
+              selectedColor: cat.color.withOpacity(0.3),
+            )).toList()),
+            const SizedBox(height: 20),
+            ListTile(title: const Text('시작 날짜'), subtitle: Text(DateFormat('yyyy-MM-dd').format(start)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () async {
+              final d = await showDatePicker(context: context, initialDate: start, firstDate: DateTime(2020), lastDate: DateTime(2030));
+              if(d != null) setModalState(() => start = DateTime(d.year, d.month, d.day, start.hour, start.minute));
+            }),
+            if(!isAllDay) ListTile(title: const Text('시작 시간'), subtitle: Text(DateFormat('HH:mm').format(start)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
+              showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: start, onDateTimeChanged: (d)=>setModalState(()=>start=DateTime(start.year, start.month, start.day, d.hour, d.minute)))));
+            }),
+            ListTile(title: const Text('종료 날짜'), subtitle: Text(DateFormat('yyyy-MM-dd').format(end)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () async {
+              final d = await showDatePicker(context: context, initialDate: end, firstDate: DateTime(2020), lastDate: DateTime(2030));
+              if(d != null) setModalState(() => end = DateTime(d.year, d.month, d.day, end.hour, end.minute));
+            }),
+            if(!isAllDay) ListTile(title: const Text('종료 시간'), subtitle: Text(DateFormat('HH:mm').format(end)), trailing: const Icon(Icons.access_time, size: 18), onTap: () {
+              showCupertinoModalPopup(context: context, builder: (_) => Container(height: 200, color: Colors.white, child: CupertinoDatePicker(mode: CupertinoDatePickerMode.time, initialDateTime: end, onDateTimeChanged: (d)=>setModalState(()=>end=DateTime(end.year, end.month, end.day, d.hour, d.minute)))));
+            }),
+            const SizedBox(height: 30),
+            SizedBox(width: double.infinity, height: 50, child: FilledButton(onPressed: () {
+              if(tController.text.isNotEmpty) {
+                final fs = isAllDay ? DateTime(start.year, start.month, start.day) : start;
+                final fe = isAllDay ? DateTime(end.year, end.month, end.day).add(const Duration(days: 1)) : end;
+                final nt = Todo(
+                  id: existing?.id ?? const Uuid().v4(), 
+                  userId: authP.currentUser!.uid, 
+                  title: tController.text, 
+                  description: dController.text, 
+                  startDateTime: fs, 
+                  endDateTime: fe, 
+                  categories: selectedCats, 
+                  isCompleted: existing?.isCompleted ?? false, 
+                  reactions: existing?.reactions
+                );
+                if(existing == null) todoP.addTodo(nt); else todoP.updateTodo(nt);
+                Navigator.pop(context);
+              }
+            }, child: const Text('저장'))),
+            const SizedBox(height: 20),
+          ]),
+        ),
+      ),
+    ),
+  );
+}
 
 class CalendarScreen extends StatefulWidget {
   final AppUser? friend;
@@ -690,511 +649,86 @@ class CalendarScreen extends StatefulWidget {
 }
 
 class _CalendarScreenState extends State<CalendarScreen> {
-  DateTime _focusedDay = DateTime.now();
-  DateTime? _selectedDay;
-
+  DateTime _focused = DateTime.now();
+  DateTime? _selected;
   @override
-  void initState() { super.initState(); _selectedDay = _focusedDay; }
+  void initState() { super.initState(); _selected = _focused; }
 
-  void _showTodoDialog({Todo? existingTodo, DateTime? initialDate}) {
-    if (widget.friend != null) return;
-
-    final titleController = TextEditingController(text: existingTodo?.title);
-    final descController = TextEditingController(text: existingTodo?.description);
-    List<TodoCategory> selectedCategories = List.from(existingTodo?.categories ?? []);
-    
-    // 시간 미지정 여부 확인 (00:00:00 인지 확인)
-    bool isAllDay = existingTodo != null && 
-                    existingTodo.startDateTime.hour == 0 && existingTodo.startDateTime.minute == 0 &&
-                    existingTodo.endDateTime.hour == 0 && existingTodo.endDateTime.minute == 0;
-
-    DateTime start = existingTodo?.startDateTime ?? initialDate ?? DateTime.now();
-    DateTime end = existingTodo?.endDateTime ?? start.add(const Duration(hours: 1));
-    String? validationError; 
-
-    Future<void> pickDate(bool isStart, StateSetter setModalState) async {
-      final DateTime? picked = await showDatePicker(
-        context: context,
-        initialDate: isStart ? start : end,
-        firstDate: DateTime(2020),
-        lastDate: DateTime(2030),
-      );
-      if (picked != null) {
-        setModalState(() {
-          if (isStart) {
-            start = DateTime(picked.year, picked.month, picked.day, start.hour, start.minute);
-          } else {
-            end = DateTime(picked.year, picked.month, picked.day, end.hour, end.minute);
-          }
-          validationError = null;
-        });
-      }
+  void _handleTodoTap({Todo? existing, DateTime? initial}) {
+    if (widget.friend != null) {
+      if (existing != null) _showEmojiPicker(existing);
+      return;
     }
-
-    void pickTime(bool isStart, StateSetter setModalState) {
-      showCupertinoModalPopup(
-        context: context,
-        builder: (_) => Container(
-          height: 300, color: Theme.of(context).scaffoldBackgroundColor,
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  height: 216,
-                  child: CupertinoDatePicker(
-                    mode: CupertinoDatePickerMode.time,
-                    initialDateTime: isStart ? start : end,
-                    onDateTimeChanged: (d) => setModalState(() {
-                      if (isStart) {
-                        start = DateTime(start.year, start.month, start.day, d.hour, d.minute);
-                      } else {
-                        end = DateTime(end.year, end.month, end.day, d.hour, d.minute);
-                      }
-                      isAllDay = false;
-                      validationError = null;
-                    }),
-                  ),
-                ),
-                CupertinoButton(child: const Text('확인'), onPressed: () => Navigator.pop(context))
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    showModalBottomSheet(
-      context: context, isScrollControlled: true, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 24, right: 24, top: 24),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('일정 설정', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                    Row(
-                      children: [
-                        const Text('시간 미지정', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                        Switch(
-                          value: isAllDay, 
-                          onChanged: (v) => setModalState(() => isAllDay = v),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                TextField(controller: titleController, decoration: InputDecoration(hintText: '일정 제목', filled: true, fillColor: Theme.of(context).brightness == Brightness.light ? Colors.grey[100] : Colors.grey[800], border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none))),
-                const SizedBox(height: 12),
-                TextField(controller: descController, maxLines: 3, decoration: InputDecoration(hintText: '상세 내용', filled: true, fillColor: Theme.of(context).brightness == Brightness.light ? Colors.grey[100] : Colors.grey[800], border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none))),
-                const SizedBox(height: 20),
-                const Text('시작 일시', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
-                Row(
-                  children: [
-                    Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('yyyy.MM.dd').format(start)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () => pickDate(true, setModalState))),
-                    if (!isAllDay) Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('HH:mm').format(start)), trailing: const Icon(Icons.access_time, size: 18), onTap: () => pickTime(true, setModalState))),
-                  ],
-                ),
-                const Divider(height: 1),
-                const SizedBox(height: 10),
-                const Text('종료 일시', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
-                Row(
-                  children: [
-                    Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('yyyy.MM.dd').format(end)), trailing: const Icon(Icons.calendar_today, size: 18), onTap: () => pickDate(false, setModalState))),
-                    if (!isAllDay) Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: Text(DateFormat('HH:mm').format(end)), trailing: const Icon(Icons.access_time, size: 18), onTap: () => pickTime(false, setModalState))),
-                  ],
-                ),
-                const Divider(height: 1),
-                const SizedBox(height: 20),
-                const Text('카테고리 (중복 선택 가능)', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8, 
-                  children: context.read<TodoProvider>().categories.map((cat) {
-                    final isSelected = selectedCategories.any((c) => c.id == cat.id);
-                    return FilterChip(
-                      label: Text(cat.label), 
-                      selected: isSelected, 
-                      onSelected: (v) {
-                        setModalState(() {
-                          if (v) selectedCategories.add(cat);
-                          else selectedCategories.removeWhere((c) => c.id == cat.id);
-                        });
-                      }, 
-                      selectedColor: cat.color.withOpacity(0.3),
-                      showCheckmark: true,
-                    );
-                  }).toList()
-                ),
-                const SizedBox(height: 20),
-                if (validationError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Text(validationError!, style: const TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.bold)),
-                  ),
-                Row(
-                  children: [
-                    if(existingTodo != null) Expanded(child: OutlinedButton(onPressed: () { context.read<TodoProvider>().deleteTodo(existingTodo.id); Navigator.pop(context); }, style: OutlinedButton.styleFrom(foregroundColor: Colors.red), child: const Text('삭제'))),
-                    if(existingTodo != null) const SizedBox(width: 10),
-                    Expanded(flex: 2, child: FilledButton(onPressed: () {
-                      DateTime finalStart = isAllDay ? DateTime(start.year, start.month, start.day) : start;
-                      DateTime finalEnd = isAllDay ? DateTime(end.year, end.month, end.day).add(const Duration(days: 1)) : end;
-
-                      if (finalEnd.isBefore(finalStart)) {
-                        setModalState(() => validationError = '시작 시간은 종료 시간 이전이어야 합니다.');
-                        return;
-                      }
-                      if(titleController.text.isNotEmpty) {
-                        final user = context.read<AuthProvider>().currentUser!;
-                        final newTodo = Todo(id: existingTodo?.id ?? const Uuid().v4(), userId: user.uid, title: titleController.text, description: descController.text, startDateTime: finalStart, endDateTime: finalEnd, categories: selectedCategories, isCompleted: existingTodo?.isCompleted ?? false);
-                        if(existingTodo == null) context.read<TodoProvider>().addTodo(newTodo);
-                        else context.read<TodoProvider>().updateTodo(newTodo);
-                        Navigator.pop(context);
-                      }
-                    }, child: Text(existingTodo == null ? '저장' : '수정 완료'))),
-                  ],
-                ),
-                const SizedBox(height: 30),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    showAddEditTodoDialog(context, existing: existing, initial: initial);
   }
 
-  void _showFriendList(BuildContext context) async {
-    final auth = context.read<AuthProvider>();
-    final user = auth.currentUser!;
-    
+  void _showEmojiPicker(Todo todo) {
+    final emojis = ['👍', '❤️', '😊', '🔥', '👏', '😮'];
+    final me = context.read<AuthProvider>().currentUser!;
     showModalBottomSheet(
       context: context, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
-      builder: (context) => FutureBuilder<QuerySnapshot>(
-        future: FirebaseFirestore.instance.collection('users').where('email', whereIn: user.friends.isEmpty ? [''] : user.friends).get(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          final friends = snapshot.data!.docs.map((doc) => AppUser.fromMap(doc.data() as Map<String, dynamic>)).toList();
-          return Container(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('친구 목록', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 20),
-                if (friends.isEmpty) const Text('친구가 없습니다.')
-                else ...friends.map((f) => ListTile(
-                  leading: const CircleAvatar(child: Icon(Icons.person)),
-                  title: Text(f.name),
-                  subtitle: Text(f.email),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(context, MaterialPageRoute(builder: (c) => CalendarScreen(friend: f)));
-                  },
-                )),
-                const SizedBox(height: 20),
-              ],
-            ),
-          );
-        }
-      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('반응 남기기', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 20),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: emojis.map((e) => GestureDetector(onTap: () {
+            context.read<TodoProvider>().addReaction(todo, me.uid, me.name, e);
+            Navigator.pop(context);
+          }, child: Text(e, style: const TextStyle(fontSize: 30)))).toList()),
+          const SizedBox(height: 20),
+        ]),
+      )
     );
+  }
+
+
+  void _showFriendList() {
+    final u = context.read<AuthProvider>().currentUser!;
+    showModalBottomSheet(context: context, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))), builder: (context) => FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance.collection('users').where('email', whereIn: u.friends.isEmpty ? [''] : u.friends).get(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final friends = snapshot.data!.docs.map((d) => AppUser.fromMap(d.data() as Map<String, dynamic>)).toList();
+        return Container(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('친구 목록', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 20),
+          if (friends.isEmpty) const Text('친구가 없습니다.') else ...friends.map((f) => ListTile(leading: const CircleAvatar(child: Icon(Icons.person)), title: Text(f.name), onTap: () { Navigator.pop(context); Navigator.push(context, MaterialPageRoute(builder: (c) => CalendarScreen(friend: f))); })),
+          const SizedBox(height: 20),
+        ]));
+      }
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
-    final authUser = context.watch<AuthProvider>().currentUser;
-    final user = widget.friend ?? authUser;
+    final authU = context.watch<AuthProvider>().currentUser;
+    final user = widget.friend ?? authU;
     final isMe = widget.friend == null;
-    final todoProvider = context.watch<TodoProvider>();
-    final notifProvider = context.watch<NotificationProvider>();
-
+    final todoP = context.watch<TodoProvider>();
     return Scaffold(
       appBar: AppBar(
-        title: InkWell(
-          onTap: isMe ? () => _showFriendList(context) : null,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(user?.name ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
-              if (isMe) const Icon(Icons.arrow_drop_down),
-            ],
-          ),
-        ),
-        centerTitle: true, 
-        actions: isMe ? [
-          StreamBuilder<List<AppNotification>>(
-            stream: notifProvider.getNotificationStream(authUser!.uid),
-            builder: (context, snapshot) {
-              final unreadCount = snapshot.hasData ? snapshot.data!.where((n) => !n.isRead).length : 0;
-              return Stack(
-                children: [
-                  IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => const NotificationScreen())), icon: const Icon(Icons.notifications_outlined)),
-                  if (unreadCount > 0) Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(2), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(10)), constraints: const BoxConstraints(minWidth: 16, minHeight: 16), child: Text('$unreadCount', style: const TextStyle(color: Colors.white, fontSize: 10), textAlign: TextAlign.center))),
-                ],
-              );
-            }
-          ),
-          IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => const SettingsScreen())), icon: const Icon(Icons.settings_outlined)),
-        ] : [
-          IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
-        ]
+        title: InkWell(onTap: isMe ? _showFriendList : null, child: Row(mainAxisSize: MainAxisSize.min, children: [Text(user?.name ?? ''), if (isMe) const Icon(Icons.arrow_drop_down)])),
+        centerTitle: true, actions: isMe ? [IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c)=>const NotificationScreen())), icon: const Icon(Icons.notifications)), IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c)=>const SettingsScreen())), icon: const Icon(Icons.settings))] : [IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close))],
       ),
       body: StreamBuilder<List<Todo>>(
-        stream: todoProvider.getTodoStream(user!.uid),
+        stream: todoP.getTodoStream(user!.uid),
         builder: (context, snapshot) {
-          final allTodos = snapshot.data ?? [];
-          final todos = todoProvider.filterTodosByDate(_selectedDay ?? _focusedDay, allTodos);
-          
-          return Column(
-            children: [
-              if (!isMe) Container(width: double.infinity, color: Colors.indigo.withOpacity(0.1), padding: const EdgeInsets.symmetric(vertical: 8), child: const Text('친구의 일정을 확인 중입니다 (읽기 전용)', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.indigo))),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Card(
-                  elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.1))),
-                  child: TableCalendar(
-                    locale: 'ko_KR', firstDay: DateTime.utc(2020), lastDay: DateTime.utc(2030), focusedDay: _focusedDay,
-                    selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-                    onDaySelected: (s, f) => setState(() { _selectedDay = s; _focusedDay = f; }),
-                    eventLoader: (day) => todoProvider.filterTodosByDate(day, allTodos),
-                    calendarStyle: const CalendarStyle(
-                      todayDecoration: BoxDecoration(color: Colors.indigoAccent, shape: BoxShape.circle), 
-                      selectedDecoration: BoxDecoration(color: Colors.indigo, shape: BoxShape.circle), 
-                      markerDecoration: BoxDecoration(color: Colors.indigo, shape: BoxShape.circle),
-                      outsideDaysVisible: false,
-                    ),
-                    headerStyle: const HeaderStyle(formatButtonVisible: false, titleCentered: true),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 10), padding: const EdgeInsets.all(20), 
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).cardColor, 
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))]
-                  ),
-                  child: Column(
-                    children: [
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                        Text(DateFormat('MM월 dd일 일정').format(_selectedDay!), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        if (isMe) IconButton.filledTonal(onPressed: () => _showTodoDialog(initialDate: _selectedDay), icon: const Icon(Icons.add)),
-                      ]),
-                      const SizedBox(height: 10),
-                      Expanded(child: todos.isEmpty ? const Center(child: Text('일정이 없습니다.')) : ListView.builder(itemCount: todos.length, itemBuilder: (c, i) => TodoItemTile(todo: todos[i], onTap: () => _showTodoDialog(existingTodo: todos[i])))),
-                    ],
-                  ),
-                ),
-              )
-            ],
-          );
+          final all = snapshot.data ?? [];
+          final filtered = todoP.filterTodosByDate(_selected ?? _focused, all);
+          return Column(children: [
+            if (!isMe) Container(width: double.infinity, color: Colors.indigo.withOpacity(0.1), padding: const EdgeInsets.symmetric(vertical: 8), child: const Text('친구의 일정 (반응을 남겨보세요)', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.indigo))),
+            TableCalendar(locale: 'ko_KR', firstDay: DateTime.utc(2020), lastDay: DateTime.utc(2030), focusedDay: _focused, selectedDayPredicate: (d)=>isSameDay(_selected, d), onDaySelected: (s, f)=>setState((){_selected=s; _focused=f;}), eventLoader: (d)=>todoP.filterTodosByDate(d, all), headerStyle: const HeaderStyle(formatButtonVisible: false, titleCentered: true)),
+            Expanded(child: Container(margin: const EdgeInsets.only(top: 10), padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Theme.of(context).cardColor, borderRadius: const BorderRadius.vertical(top: Radius.circular(30))), child: Column(children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(DateFormat('MM월 dd일 일정').format(_selected!), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), if (isMe) IconButton.filledTonal(onPressed: () => _showTodoDialog(initial: _selected), icon: const Icon(Icons.add))]),
+              const SizedBox(height: 10),
+              Expanded(child: filtered.isEmpty ? const Center(child: Text('일정이 없습니다.')) : ListView.builder(itemCount: filtered.length, itemBuilder: (c, i) => TodoItemTile(todo: filtered[i], onTap: () => _showTodoDialog(existing: filtered[i]))))
+            ])))
+          ]);
         }
       ),
     );
   }
 }
-
-// --------------------------------------------------------------------------
-// 설정 화면
-// --------------------------------------------------------------------------
-
-class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
-    final authProvider = context.watch<AuthProvider>();
-    final nameController = TextEditingController();
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('설정', style: TextStyle(fontWeight: FontWeight.bold)), centerTitle: true),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          const Text('앱 설정', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.grey)),
-          const SizedBox(height: 10),
-          Card(
-            elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.1))),
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.dark_mode_outlined),
-                  title: const Text('다크 모드'),
-                  trailing: Switch(value: themeProvider.themeMode == ThemeMode.dark, onChanged: (_) => themeProvider.toggleTheme()),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.logout, color: Colors.red),
-                  title: const Text('로그아웃', style: TextStyle(color: Colors.red)),
-                  onTap: () {
-                    authProvider.logout();
-                    Navigator.pop(context);
-                  },
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.delete_forever, color: Colors.red),
-                  title: const Text('회원 탈퇴', style: TextStyle(color: Colors.red)),
-                  onTap: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (c) => AlertDialog(
-                        title: const Text('회원 탈퇴'),
-                        content: const Text('정말로 탈퇴하시겠습니까? 모든 데이터가 영구적으로 삭제됩니다.'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('취소')),
-                          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('탈퇴', style: TextStyle(color: Colors.red))),
-                        ],
-                      ),
-                    );
-                    if (confirm == true) {
-                      final err = await authProvider.deleteAccount();
-                      if (err != null && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
-                      } else if (context.mounted) {
-                        Navigator.pop(context);
-                      }
-                    }
-                  },
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 30),
-          const Text('친구 관리', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.grey)),
-          const SizedBox(height: 10),
-          Card(
-            elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.1))),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    children: [
-                      Expanded(child: TextField(controller: nameController, decoration: const InputDecoration(hintText: '친구 이름 입력', border: InputBorder.none))),
-                      IconButton.filledTonal(onPressed: () async {
-                        if (nameController.text.isNotEmpty) {
-                          final msg = await authProvider.sendFriendRequest(nameController.text.trim());
-                          if(context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
-                            if (msg == '성공') nameController.clear();
-                          }
-                        }
-                      }, icon: const Icon(Icons.person_add_alt_1)),
-                    ],
-                  ),
-                ),
-                if (authProvider.currentUser!.friends.isNotEmpty) ...[
-                  const Divider(height: 1),
-                  FutureBuilder<QuerySnapshot>(
-                    future: FirebaseFirestore.instance.collection('users').where('email', whereIn: authProvider.currentUser!.friends).get(),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData) return const SizedBox();
-                      final friends = snapshot.data!.docs;
-                      return Column(
-                        children: friends.map((fDoc) {
-                          final f = AppUser.fromMap(fDoc.data() as Map<String, dynamic>);
-                          return ListTile(
-                            title: Text(f.name),
-                            subtitle: Text(f.email),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.person_remove, color: Colors.redAccent),
-                              onPressed: () => authProvider.removeFriend(f.email),
-                            ),
-                          );
-                        }).toList(),
-                      );
-                    }
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// --------------------------------------------------------------------------
-// 알림 화면
-// --------------------------------------------------------------------------
-
-class NotificationScreen extends StatelessWidget {
-  const NotificationScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-    final provider = context.watch<NotificationProvider>();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('알림', style: TextStyle(fontWeight: FontWeight.bold)), 
-        centerTitle: true,
-        actions: [
-          TextButton(
-            onPressed: () => provider.deleteAllNotifications(auth.currentUser!.uid),
-            child: const Text('전체 삭제', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-      body: StreamBuilder<List<AppNotification>>(
-        stream: provider.getNotificationStream(auth.currentUser!.uid),
-        builder: (context, snapshot) {
-          final notifications = snapshot.data ?? [];
-          if (notifications.isEmpty) return const Center(child: Text('알림이 없습니다.'));
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: notifications.length,
-            itemBuilder: (c, i) {
-              final n = notifications[i];
-              return Card(
-                elevation: 0, 
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                color: n.isRead ? Colors.white : Theme.of(context).primaryColor.withOpacity(0.05),
-                child: ListTile(
-                  title: Text(n.title, style: TextStyle(fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold)),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(n.message),
-                      const SizedBox(height: 4),
-                      Text(DateFormat('MM/dd HH:mm').format(n.timestamp), style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                    ],
-                  ),
-                  trailing: n.type == 'friend_request' && !auth.currentUser!.friends.contains(n.senderEmail) ? TextButton(
-                    onPressed: () async {
-                      final msg = await auth.acceptFriendRequest(n.senderEmail!);
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
-                        if (msg == '성공') provider.markAsRead(n.id);
-                      }
-                    }, 
-                    child: const Text('수락'),
-                  ) : null,
-                  onTap: () => provider.markAsRead(n.id),
-                ),
-              );
-            },
-          );
-        }
-      ),
-    );
-  }
-}
-
-// --------------------------------------------------------------------------
-// 할 일 목록 및 카테고리 관리
-// --------------------------------------------------------------------------
 
 class TodoListScreen extends StatefulWidget {
   const TodoListScreen({super.key});
@@ -1203,146 +737,204 @@ class TodoListScreen extends StatefulWidget {
 }
 
 class _TodoListScreenState extends State<TodoListScreen> {
-  TodoCategory? _filter;
-  final List<Color> _colorPalette = [Colors.red, Colors.pink, Colors.purple, Colors.deepPurple, Colors.indigo, Colors.blue, Colors.lightBlue, Colors.cyan, Colors.teal, Colors.green, Colors.lightGreen, Colors.lime, Colors.yellow, Colors.amber, Colors.orange, Colors.deepOrange, Colors.brown, Colors.grey, Colors.blueGrey, Colors.black];
+  @override
+  Widget build(BuildContext context) {
+    final p = context.watch<TodoProvider>();
+    final a = context.watch<AuthProvider>();
+    return Scaffold(
+      appBar: AppBar(title: const Text('전체 일정', style: TextStyle(fontWeight: FontWeight.bold)), centerTitle: true),
+      body: StreamBuilder<List<Todo>>(
+        stream: p.getTodoStream(a.currentUser!.uid),
+        builder: (context, snapshot) {
+          final now = DateTime.now();
+          final todos = (snapshot.data ?? []).where((t) => t.endDateTime.isAfter(now)).toList();
+          todos.sort((a, b) => a.startDateTime.compareTo(b.startDateTime));
+          if (todos.isEmpty) return const Center(child: Text('진행 중인 일정이 없습니다.'));
+          return ListView.builder(padding: const EdgeInsets.all(16), itemCount: todos.length, itemBuilder: (c, i) => TodoItemTile(todo: todos[i], onTap: () {
+            // 이 화면에서도 수정 가능하게 다이얼로그 호출 로직을 위해 CalendarScreen의 다이얼로그를 공통 위젯으로 뺄 필요가 있으나,
+            // 여기서는 단순함을 위해 캘린더 탭으로 유도하거나 간단한 스낵바를 띄웁니다.
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('캘린더 탭에서 해당 날짜를 선택하여 수정할 수 있습니다.')));
+          }));
+        },
+      ),
+    );
+  }
+}
 
-  void _showAddCategoryDialog() {
-    final controller = TextEditingController();
-    Color selectedColor = _colorPalette[0];
-    showDialog(context: context, builder: (context) => StatefulBuilder(builder: (context, setModalState) => AlertDialog(
-      title: const Text('새 카테고리'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: controller, decoration: const InputDecoration(hintText: '이름 입력')),
+class TaskScreen extends StatelessWidget {
+  const TaskScreen({super.key});
+  void _showTaskDialog(BuildContext context, {UserTask? existing}) {
+    final tController = TextEditingController(text: existing?.title);
+    final dController = TextEditingController(text: existing?.description);
+    showModalBottomSheet(context: context, isScrollControlled: true, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(25))), builder: (context) => Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom, left: 24, right: 24, top: 24),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Text('할 일 설정', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 20),
-        SizedBox(width: 300, child: Wrap(spacing: 8, runSpacing: 8, children: _colorPalette.map((color) => GestureDetector(onTap: () => setModalState(() => selectedColor = color), child: Container(width: 32, height: 32, decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: selectedColor == color ? Border.all(width: 3, color: Colors.white) : null, boxShadow: [if(selectedColor==color) const BoxShadow(color: Colors.black26, blurRadius: 4)])))).toList())),
+        TextField(controller: tController, decoration: const InputDecoration(hintText: '제목')),
+        TextField(controller: dController, decoration: const InputDecoration(hintText: '내용')),
+        const SizedBox(height: 30),
+        SizedBox(width: double.infinity, child: FilledButton(onPressed: () {
+          if(tController.text.isNotEmpty) {
+            final prov = context.read<TaskProvider>();
+            final nt = UserTask(id: existing?.id ?? const Uuid().v4(), userId: context.read<AuthProvider>().currentUser!.uid, title: tController.text, description: dController.text, isCompleted: existing?.isCompleted ?? false);
+            if(existing == null) prov.addTask(nt); else prov.updateTask(nt);
+            Navigator.pop(context);
+          }
+        }, child: const Text('저장'))),
+        const SizedBox(height: 30),
       ]),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')), FilledButton(onPressed: () { if(controller.text.isNotEmpty) { context.read<TodoProvider>().addCategory(controller.text, selectedColor); Navigator.pop(context); } }, child: const Text('추가'))],
-    )));
+    ));
+  }
+  @override
+  Widget build(BuildContext context) {
+    final a = context.watch<AuthProvider>();
+    final p = context.watch<TaskProvider>();
+    return Scaffold(
+      appBar: AppBar(title: const Text('할 일', style: TextStyle(fontWeight: FontWeight.bold)), centerTitle: true),
+      body: StreamBuilder<List<UserTask>>(
+        stream: p.getTaskStream(a.currentUser!.uid),
+        builder: (context, snapshot) {
+          final tasks = snapshot.data ?? [];
+          if (tasks.isEmpty) return const Center(child: Text('할 일이 없습니다.'));
+          return ListView.builder(padding: const EdgeInsets.all(16), itemCount: tasks.length, itemBuilder: (c, i) {
+            final t = tasks[i];
+            return Dismissible(key: Key(t.id), onDismissed: (_)=>p.deleteTask(t.id), child: Card(child: ListTile(
+              leading: Checkbox(value: t.isCompleted, onChanged: (_)=>p.toggleTask(t)),
+              title: Text(t.title, style: TextStyle(decoration: t.isCompleted ? TextDecoration.lineThrough : null)),
+              subtitle: t.description.isNotEmpty ? Text(t.description) : null,
+              onTap: () => _showTaskDialog(context, existing: t),
+            )));
+          });
+        },
+      ),
+      floatingActionButton: FloatingActionButton(onPressed: () => _showTaskDialog(context), child: const Icon(Icons.add)),
+    );
+  }
+}
+
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final tp = context.watch<ThemeProvider>();
+    final ap = context.watch<AuthProvider>();
+    final nController = TextEditingController();
+    return Scaffold(
+      appBar: AppBar(title: const Text('설정')),
+      body: ListView(padding: const EdgeInsets.all(20), children: [
+        const Text('앱 설정', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+        Card(child: Column(children: [
+          ListTile(leading: const Icon(Icons.dark_mode), title: const Text('다크 모드'), trailing: Switch(value: tp.themeMode == ThemeMode.dark, onChanged: (_)=>tp.toggleTheme())),
+          ListTile(leading: const Icon(Icons.logout, color: Colors.red), title: const Text('로그아웃'), onTap: (){ ap.logout(); Navigator.pop(context); }),
+          ListTile(leading: const Icon(Icons.delete_forever, color: Colors.red), title: const Text('회원 탈퇴'), onTap: () async {
+            final ok = await showDialog<bool>(context: context, builder: (c)=>AlertDialog(title: const Text('회원 탈퇴'), content: const Text('모든 데이터가 삭제됩니다.'), actions: [TextButton(onPressed: ()=>Navigator.pop(c,false), child: const Text('취소')), TextButton(onPressed: ()=>Navigator.pop(c,true), child: const Text('탈퇴', style: TextStyle(color: Colors.red)))]));
+            if(ok==true) { await ap.deleteAccount(); Navigator.pop(context); }
+          }),
+        ])),
+        const SizedBox(height: 30),
+        const Text('친구 관리', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+        Card(child: Column(children: [
+          Padding(padding: const EdgeInsets.all(16), child: Row(children: [
+            Expanded(child: TextField(controller: nController, decoration: const InputDecoration(hintText: '친구 이름 입력'))),
+            IconButton(onPressed: () async { if(nController.text.isNotEmpty) { final m = await ap.sendFriendRequest(nController.text.trim()); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); nController.clear(); } }, icon: const Icon(Icons.person_add))
+          ])),
+          if (ap.currentUser!.friends.isNotEmpty) FutureBuilder<QuerySnapshot>(
+            future: FirebaseFirestore.instance.collection('users').where('email', whereIn: ap.currentUser!.friends).get(),
+            builder: (context, snap) {
+              if(!snap.hasData) return const SizedBox();
+              return Column(children: snap.data!.docs.map((d) {
+                final f = AppUser.fromMap(d.data() as Map<String, dynamic>);
+                return ListTile(title: Text(f.name), subtitle: Text(f.email), trailing: IconButton(icon: const Icon(Icons.person_remove, color: Colors.red), onPressed: ()=>ap.removeFriend(f.email)));
+              }).toList());
+            }
+          )
+        ]))
+      ]),
+    );
+  }
+}
+
+class NotificationScreen extends StatelessWidget {
+  const NotificationScreen({super.key});
+
+  void _showTodoDetails(BuildContext context, String todoId) async {
+    final doc = await FirebaseFirestore.instance.collection('todos').doc(todoId).get();
+    if (doc.exists && context.mounted) {
+      final todo = Todo.fromMap(doc.data()!);
+      showDialog(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text(todo.title),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (todo.description.isNotEmpty) Text(todo.description),
+              const SizedBox(height: 10),
+              Text('일시: ${DateFormat('MM/dd HH:mm').format(todo.startDateTime)}', style: const TextStyle(fontSize: 12)),
+            ],
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('닫기'))],
+        ),
+      );
+    } else if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('삭제된 일정입니다.')));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final provider = context.watch<TodoProvider>();
-    final auth = context.watch<AuthProvider>();
-
+    final a = context.watch<AuthProvider>();
+    final p = context.watch<NotificationProvider>();
     return Scaffold(
-      appBar: AppBar(title: const Text('전체 일정', style: TextStyle(fontWeight: FontWeight.bold)), centerTitle: true),
-      body: StreamBuilder<List<Todo>>(
-        stream: provider.getTodoStream(auth.currentUser!.uid),
-        builder: (context, snapshot) {
-          final allTodos = snapshot.data ?? [];
-          final now = DateTime.now();
-          
-          // 지난 일정 필터링 및 카테고리 필터 적용
-          var todos = allTodos.where((t) => t.endDateTime.isAfter(now)).toList();
-          if (_filter != null) {
-            todos = todos.where((t) => t.categories.any((c) => c.id == _filter!.id)).toList();
-          }
-          
-          // 시간순 정렬
-          todos.sort((a, b) => a.startDateTime.compareTo(b.startDateTime));
-
-          return Column(
-            children: [
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    FilterChip(
-                      label: const Text('전체'), 
-                      selected: _filter == null, 
-                      onSelected: (v) => setState(() => _filter = null),
-                      showCheckmark: false,
-                    ),
-                    const SizedBox(width: 8),
-                    ...provider.categories.map((c) => Padding(
-                      padding: const EdgeInsets.only(right: 8.0),
-                      child: GestureDetector(
-                        onLongPress: () {
-                          showDialog(context: context, builder: (dialogContext) => AlertDialog(
-                            title: const Text('카테고리 삭제'), 
-                            content: Text('"${c.label}" 카테고리를 삭제하시겠습니까?'), 
-                            actions: [
-                              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('취소')), 
-                              TextButton(onPressed: () { 
-                                provider.deleteCategory(c.id); 
-                                Navigator.pop(dialogContext); 
-                              }, child: const Text('삭제', style: TextStyle(color: Colors.red)))
-                            ]
-                          ));
-                        },
-                        child: FilterChip(
-                          label: Text(c.label), 
-                          selected: _filter?.id == c.id, 
-                          onSelected: (v) => setState(() => _filter = v ? c : null), 
-                          selectedColor: c.color.withOpacity(0.3),
-                          showCheckmark: false,
-                        ),
-                      ),
-                    )),
-                    IconButton.filledTonal(onPressed: _showAddCategoryDialog, icon: const Icon(Icons.add, size: 20)),
-                  ],
-                ),
+      appBar: AppBar(title: const Text('알림'), actions: [TextButton(onPressed: ()=>p.deleteAllNotifications(a.currentUser!.uid), child: const Text('전체 삭제', style: TextStyle(color: Colors.red)))]),
+      body: StreamBuilder<List<AppNotification>>(
+        stream: p.getNotificationStream(a.currentUser!.uid),
+        builder: (context, snap) {
+          final list = snap.data ?? [];
+          if(list.isEmpty) return const Center(child: Text('알림이 없습니다.'));
+          return ListView.builder(padding: const EdgeInsets.all(16), itemCount: list.length, itemBuilder: (c, i) {
+            final n = list[i];
+            return Card(
+              color: n.isRead ? null : Colors.indigo.withOpacity(0.05),
+              child: ListTile(
+                title: Text(n.title, style: TextStyle(fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold)),
+                subtitle: Text(n.message),
+                trailing: n.type == 'friend_request' && !a.currentUser!.friends.contains(n.senderEmail) ? TextButton(onPressed: () async { final m = await a.acceptFriendRequest(n.senderEmail!); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); p.markAsRead(n.id); }, child: const Text('수락')) : null,
+                onTap: () {
+                  p.markAsRead(n.id);
+                  if (n.todoId != null) {
+                    _showTodoDetails(context, n.todoId!);
+                  }
+                },
               ),
-              Expanded(child: todos.isEmpty ? const Center(child: Text('일정이 없습니다.')) : ListView.builder(padding: const EdgeInsets.all(16), itemCount: todos.length, itemBuilder: (c, i) => TodoItemTile(todo: todos[i], showDate: true, onTap: () => _showTodoDialogFromList(context, todos[i])))),
-            ],
-          );
-        }
+            );
+          });
+        },
       ),
     );
-  }
-
-  void _showTodoDialogFromList(BuildContext context, Todo todo) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('캘린더 화면에서 일정을 클릭하여 수정할 수 있습니다.')));
   }
 }
 
 class TodoItemTile extends StatelessWidget {
   final Todo todo;
-  final bool showDate;
   final VoidCallback onTap;
-  const TodoItemTile({super.key, required this.todo, this.showDate = false, required this.onTap});
-
+  const TodoItemTile({super.key, required this.todo, required this.onTap});
   @override
   Widget build(BuildContext context) {
-    bool isAllDay = todo.startDateTime.hour == 0 && todo.startDateTime.minute == 0 &&
-                    todo.endDateTime.hour == 0 && todo.endDateTime.minute == 0;
-    
-    final startStr = isAllDay ? DateFormat('M/d').format(todo.startDateTime) : DateFormat('M/d HH:mm').format(todo.startDateTime);
-    final endStr = isAllDay ? DateFormat('M/d').format(todo.endDateTime.subtract(const Duration(seconds: 1))) : DateFormat('M/d HH:mm').format(todo.endDateTime);
-    
-    return Dismissible(
-      key: Key(todo.id), direction: DismissDirection.endToStart,
-      background: Container(color: Colors.redAccent, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
-      onDismissed: (d) => context.read<TodoProvider>().deleteTodo(todo.id),
-      child: Card(
-        elevation: 0, margin: const EdgeInsets.only(bottom: 12), 
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        child: ListTile(
-          onTap: onTap,
-          title: Text(todo.title, style: TextStyle(decoration: todo.isCompleted ? TextDecoration.lineThrough : null, fontWeight: FontWeight.bold)),
-          subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (todo.description.isNotEmpty) Text(todo.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            const SizedBox(height: 4),
-            Text(isAllDay && todo.startDateTime.day == todo.endDateTime.subtract(const Duration(seconds: 1)).day ? startStr : '$startStr - $endStr', style: const TextStyle(fontSize: 12, color: Colors.indigo, fontWeight: FontWeight.w600)),
-            if (todo.categories.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Wrap(
-                  spacing: 4,
-                  children: todo.categories.map((cat) => Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(color: cat.color.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
-                    child: Text(cat.label, style: TextStyle(fontSize: 10, color: cat.color, fontWeight: FontWeight.bold)),
-                  )).toList(),
-                ),
-              )
-            else
-              const Text('카테고리 없음', style: TextStyle(fontSize: 10, color: Colors.grey))
-          ]),
-          trailing: const Icon(Icons.edit_note, color: Colors.grey),
-        ),
-      ),
-    );
+    bool isAllDay = todo.startDateTime.hour == 0 && todo.startDateTime.minute == 0 && todo.endDateTime.hour == 0 && todo.endDateTime.minute == 0;
+    final sStr = isAllDay ? DateFormat('M/d').format(todo.startDateTime) : DateFormat('M/d HH:mm').format(todo.startDateTime);
+    final eStr = isAllDay ? DateFormat('M/d').format(todo.endDateTime.subtract(const Duration(seconds: 1))) : DateFormat('M/d HH:mm').format(todo.endDateTime);
+    return Dismissible(key: Key(todo.id), onDismissed: (_)=>context.read<TodoProvider>().deleteTodo(todo.id), child: Card(
+      elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: ListTile(onTap: onTap, title: Row(children: [
+        Expanded(child: Text(todo.title, style: TextStyle(decoration: todo.isCompleted ? TextDecoration.lineThrough : null, fontWeight: FontWeight.bold))),
+        if (todo.reactions.isNotEmpty) ...todo.reactions.values.take(3).map((e) => Padding(padding: const EdgeInsets.only(left: 4), child: Text(e, style: const TextStyle(fontSize: 12)))),
+      ]), subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (todo.description.isNotEmpty) Text(todo.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        Text(isAllDay && todo.startDateTime.day == todo.endDateTime.subtract(const Duration(seconds: 1)).day ? sStr : '$sStr - $eStr', style: const TextStyle(fontSize: 12, color: Colors.indigo, fontWeight: FontWeight.bold)),
+      ])),
+    ));
   }
 }
