@@ -40,6 +40,15 @@ class TaskScreen extends StatelessWidget {
         builder: (context, snapshot) {
           final tasks = snapshot.data ?? [];
           if (tasks.isEmpty) return const Center(child: Text('할 일이 없습니다.'));
+          
+          // 정렬 로직 추가: 완료 여부(미완료 우선) -> 생성일(최신순)
+          tasks.sort((a, b) {
+            if (a.isCompleted != b.isCompleted) {
+              return a.isCompleted ? 1 : -1;
+            }
+            return b.createdAt.compareTo(a.createdAt);
+          });
+
           return ListView.builder(padding: const EdgeInsets.all(16), itemCount: tasks.length, itemBuilder: (c, i) {
             final t = tasks[i];
             return Dismissible(key: Key(t.id), onDismissed: (_)=>p.deleteTask(t.id), child: Card(child: ListTile(

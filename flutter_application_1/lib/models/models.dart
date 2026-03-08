@@ -41,6 +41,7 @@ class AppNotification {
   final String type;
   final String? senderEmail;
   final String? todoId;
+  final Map<String, dynamic>? sharedTodoData; // 추가: 공유된 일정 데이터
   bool isRead;
 
   AppNotification({
@@ -51,6 +52,7 @@ class AppNotification {
     required this.type,
     this.senderEmail,
     this.todoId,
+    this.sharedTodoData,
     this.isRead = false,
   });
 
@@ -62,6 +64,7 @@ class AppNotification {
     'type': type,
     'senderEmail': senderEmail,
     'todoId': todoId,
+    'sharedTodoData': sharedTodoData,
     'isRead': isRead,
   };
 
@@ -73,6 +76,7 @@ class AppNotification {
     type: map['type'],
     senderEmail: map['senderEmail'],
     todoId: map['todoId'],
+    sharedTodoData: map['sharedTodoData'],
     isRead: map['isRead'] ?? false,
   );
 }
@@ -105,7 +109,7 @@ class Todo {
   DateTime endDateTime;
   List<TodoCategory> categories;
   bool isCompleted;
-  Map<String, String> reactions;
+  Map<String, dynamic> reactions;
 
   Todo({
     required this.id,
@@ -116,7 +120,7 @@ class Todo {
     required this.endDateTime,
     required this.categories,
     this.isCompleted = false,
-    Map<String, String>? reactions,
+    Map<String, dynamic>? reactions,
   }) : reactions = reactions ?? {};
 
   Map<String, dynamic> toMap() => {
@@ -140,7 +144,7 @@ class Todo {
     endDateTime: DateTime.parse(map['endDateTime']),
     categories: (map['categories'] as List).map((c) => TodoCategory.fromJson(c)).toList(),
     isCompleted: map['isCompleted'] ?? false,
-    reactions: Map<String, String>.from(map['reactions'] ?? {}),
+    reactions: Map<String, dynamic>.from(map['reactions'] ?? {}),
   );
 }
 
@@ -150,9 +154,32 @@ class UserTask {
   String title;
   String description;
   bool isCompleted;
+  DateTime createdAt;
 
-  UserTask({required this.id, required this.userId, required this.title, this.description = '', this.isCompleted = false});
+  UserTask({
+    required this.id, 
+    required this.userId, 
+    required this.title, 
+    this.description = '', 
+    this.isCompleted = false,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
 
-  Map<String, dynamic> toMap() => {'id': id, 'userId': userId, 'title': title, 'description': description, 'isCompleted': isCompleted};
-  factory UserTask.fromMap(Map<String, dynamic> map) => UserTask(id: map['id'], userId: map['userId'], title: map['title'], description: map['description'] ?? '', isCompleted: map['isCompleted'] ?? false);
+  Map<String, dynamic> toMap() => {
+    'id': id, 
+    'userId': userId, 
+    'title': title, 
+    'description': description, 
+    'isCompleted': isCompleted,
+    'createdAt': createdAt.toIso8601String(),
+  };
+
+  factory UserTask.fromMap(Map<String, dynamic> map) => UserTask(
+    id: map['id'], 
+    userId: map['userId'], 
+    title: map['title'], 
+    description: map['description'] ?? '', 
+    isCompleted: map['isCompleted'] ?? false,
+    createdAt: map['createdAt'] != null ? DateTime.parse(map['createdAt']) : DateTime.now(),
+  );
 }

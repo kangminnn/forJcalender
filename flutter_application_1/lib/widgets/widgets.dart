@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/models.dart';
 import '../providers/providers.dart';
 
@@ -181,9 +182,90 @@ class TodoItemTile extends StatelessWidget {
   final Todo todo;
   final VoidCallback onTap;
   const TodoItemTile({super.key, required this.todo, required this.onTap});
+
+  Future<void> _showFriendSelectionDialog(BuildContext context, AuthProvider authP, TodoProvider todoP) async {
+    final friendsEmails = authP.currentUser?.friends ?? [];
+    if (friendsEmails.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('공유할 친구가 없습니다.')));
+      return;
+    }
+
+    // 로딩 다이얼로그 표시
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final db = FirebaseFirestore.instance;
+      final friendsData = <Map<String, String>>[];
+      
+      // 친구들의 이메일로 이름 정보 조회
+      for (final email in friendsEmails) {
+        final q = await db.collection('users').where('email', isEqualTo: email).get();
+        if (q.docs.isNotEmpty) {
+          friendsData.add({
+            'email': email,
+            'name': q.docs.first.get('name') ?? email,
+          });
+        }
+      }
+
+      if (!context.mounted) return;
+      Navigator.pop(context); // 로딩 창 닫기
+
+      final selectedEmails = <String>[];
+      showDialog(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setState) => AlertDialog(
+            title: const Text('친구에게 공유'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: friendsData.length,
+                itemBuilder: (context, i) {
+                  final friend = friendsData[i];
+                  return CheckboxListTile(
+                    title: Text(friend['name']!),
+                    subtitle: Text(friend['email']!, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                    value: selectedEmails.contains(friend['email']),
+                    onChanged: (v) => setState(() { 
+                      if(v!) selectedEmails.add(friend['email']!); 
+                      else selectedEmails.remove(friend['email']); 
+                    }),
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
+              FilledButton(
+                onPressed: selectedEmails.isEmpty ? null : () {
+                  todoP.shareTodo(todo, authP.currentUser!.name, selectedEmails);
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('일정을 공유했습니다.')));
+                }, 
+                child: const Text('공유')
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        Navigator.pop(context); // 로딩 창 닫기
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('친구 정보를 가져오지 못했습니다: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final authP = context.read<AuthProvider>();
+    final todoP = context.read<TodoProvider>();
     final isMe = todo.userId == authP.currentUser?.uid;
     
     bool isAllDay = todo.startDateTime.hour == 0 && todo.startDateTime.minute == 0 && todo.endDateTime.hour == 0 && todo.endDateTime.minute == 0;
@@ -194,7 +276,22 @@ class TodoItemTile extends StatelessWidget {
       elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       child: ListTile(onTap: onTap, title: Row(children: [
         Expanded(child: Text(todo.title, style: TextStyle(decoration: todo.isCompleted ? TextDecoration.lineThrough : null, fontWeight: FontWeight.bold))),
-        if (todo.reactions.isNotEmpty) ...todo.reactions.values.take(3).map((e) => Padding(padding: const EdgeInsets.only(left: 4), child: Text(e, style: const TextStyle(fontSize: 12)))),
+        if (todo.reactions.isNotEmpty) ...(() {
+          // 반응들을 리스트로 변환하여 시간순 정렬
+          var reactionEntries = todo.reactions.entries.toList();
+          reactionEntries.sort((a, b) {
+            String? timeA = (a.value is Map) ? a.value['timestamp'] : null;
+            String? timeB = (b.value is Map) ? b.value['timestamp'] : null;
+            if (timeA == null) return 1;
+            if (timeB == null) return -1;
+            return timeB.compareTo(timeA); // 최신순
+          });
+          
+          return reactionEntries.take(3).map((e) {
+            String emoji = (e.value is Map) ? e.value['emoji'] : e.value.toString();
+            return Padding(padding: const EdgeInsets.only(left: 4), child: Text(emoji, style: const TextStyle(fontSize: 12)));
+          });
+        }()),
       ]), subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (todo.description.isNotEmpty) Text(todo.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Colors.grey)),
         Text(isAllDay && todo.startDateTime.day == todo.endDateTime.subtract(const Duration(seconds: 1)).day ? sStr : '$sStr - $eStr', style: const TextStyle(fontSize: 12, color: Colors.indigo, fontWeight: FontWeight.bold)),
@@ -205,27 +302,44 @@ class TodoItemTile extends StatelessWidget {
 
     return Dismissible(
       key: Key(todo.id),
-      direction: DismissDirection.endToStart,
+      direction: DismissDirection.horizontal,
       background: Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(15)),
+        child: const Icon(Icons.share, color: Colors.white),
+      ),
+      secondaryBackground: Container(
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(15)),
         child: const Icon(Icons.delete, color: Colors.white),
       ),
       confirmDismiss: (direction) async {
-        return await showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('일정 삭제'),
-            content: const Text('이 일정을 삭제하시겠습니까?'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
-              TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
-            ],
-          ),
-        );
+        if (direction == DismissDirection.startToEnd) {
+          // 오른쪽 밀기: 공유 창 띄우고 항목 유지
+          _showFriendSelectionDialog(context, authP, todoP);
+          return false;
+        } else {
+          // 왼쪽 밀기: 기존 삭제 로직
+          return await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('일정 삭제'),
+              content: const Text('이 일정을 삭제하시겠습니까?'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+                TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('삭제', style: TextStyle(color: Colors.red))),
+              ],
+            ),
+          );
+        }
       },
-      onDismissed: (_) => context.read<TodoProvider>().deleteTodo(todo.id),
+      onDismissed: (direction) {
+        if (direction == DismissDirection.endToStart) {
+          todoP.deleteTodo(todo.id);
+        }
+      },
       child: content,
     );
   }

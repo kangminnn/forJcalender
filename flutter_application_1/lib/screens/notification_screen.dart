@@ -46,15 +46,30 @@ class NotificationScreen extends StatelessWidget {
           if(list.isEmpty) return const Center(child: Text('알림이 없습니다.'));
           return ListView.builder(padding: const EdgeInsets.all(16), itemCount: list.length, itemBuilder: (c, i) {
             final n = list[i];
+            
+            Widget? trailing;
+            if (n.type == 'friend_request' && !a.currentUser!.friends.contains(n.senderEmail)) {
+              trailing = TextButton(onPressed: () async { 
+                final m = await a.acceptFriendRequest(n.senderEmail!); 
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); 
+                p.markAsRead(n.id); 
+              }, child: const Text('수락'));
+            } else if (n.type == 'schedule_share' && n.sharedTodoData != null) {
+              trailing = TextButton(onPressed: () async {
+                final m = await context.read<TodoProvider>().acceptSharedTodo(a.currentUser!.uid, n.sharedTodoData!);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m == '성공' ? '일정이 추가되었습니다.' : m)));
+                p.markAsRead(n.id);
+              }, child: const Text('추가'));
+            }
+
             return Card(
               color: n.isRead ? null : Colors.indigo.withOpacity(0.05),
               child: ListTile(
                 title: Text(n.title, style: TextStyle(fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold)),
                 subtitle: Text(n.message),
-                trailing: n.type == 'friend_request' && !a.currentUser!.friends.contains(n.senderEmail) ? TextButton(onPressed: () async { final m = await a.acceptFriendRequest(n.senderEmail!); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m))); p.markAsRead(n.id); }, child: const Text('수락')) : null,
+                trailing: trailing,
                 onTap: () {
                   p.markAsRead(n.id);
-                  // 기존에 있던 _showTodoDetails 호출을 제거하여 아무 창도 뜨지 않게 함
                 },
               ),
             );

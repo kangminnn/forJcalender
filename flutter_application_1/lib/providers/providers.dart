@@ -158,6 +158,33 @@ class TaskProvider extends ChangeNotifier {
   Future<void> updateTask(UserTask t) async => await _db.collection('tasks').doc(t.id).update(t.toMap());
   Future<void> deleteTask(String id) async => await _db.collection('tasks').doc(id).delete();
   Future<void> toggleTask(UserTask t) async => await _db.collection('tasks').doc(t.id).update({'isCompleted': !t.isCompleted});
+
+  // 자정이 지난 완료된 할 일들을 데이터베이스에서 영구 삭제
+  Future<void> cleanupOldTasks(String uid) async {
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    
+    final snapshot = await _db.collection('tasks')
+        .where('userId', isEqualTo: uid)
+        .where('isCompleted', isEqualTo: true)
+        .get();
+
+    final batch = _db.batch();
+    bool hasUpdates = false;
+
+    for (var doc in snapshot.docs) {
+      final task = UserTask.fromMap(doc.data());
+      final taskDate = DateTime(task.createdAt.year, task.createdAt.month, task.createdAt.day);
+      
+      // 생성일이 오늘보다 이전인 완료된 항목은 삭제 대상
+      if (taskDate.isBefore(todayStart)) {
+        batch.delete(doc.reference);
+        hasUpdates = true;
+      }
+    }
+
+    if (hasUpdates) await batch.commit();
+  }
 }
 
 class TodoProvider extends ChangeNotifier {
@@ -192,7 +219,12 @@ class TodoProvider extends ChangeNotifier {
   Future<void> toggleTodo(Todo t) async => await _db.collection('todos').doc(t.id).update({'isCompleted': !t.isCompleted});
   
   Future<void> addReaction(Todo todo, String senderUid, String senderName, String emoji) async {
-    await _db.collection('todos').doc(todo.id).update({'reactions.$senderUid': emoji});
+    await _db.collection('todos').doc(todo.id).update({
+      'reactions.$senderUid': {
+        'emoji': emoji,
+        'timestamp': DateTime.now().toIso8601String(),
+      }
+    });
     if (todo.userId != senderUid) {
       await _db.collection('notifications').add(AppNotification(
         id: const Uuid().v4(),
@@ -211,6 +243,47 @@ class TodoProvider extends ChangeNotifier {
     await _db.collection('users').doc(uid).collection('categories').doc(newCat.id).set(newCat.toJson());
     _categories.add(newCat);
     notifyListeners();
+  }
+
+  Future<void> shareTodo(Todo todo, String senderName, List<String> targetEmails) async {
+    for (var email in targetEmails) {
+      final query = await _db.collection('users').where('email', isEqualTo: email).get();
+      if (query.docs.isNotEmpty) {
+        final targetUid = query.docs.first.id;
+        await _db.collection('notifications').add(AppNotification(
+          id: const Uuid().v4(),
+          title: '일정 공유 요청',
+          message: '$senderName님이 일정을 공유했습니다: "${todo.title}"',
+          timestamp: DateTime.now(),
+          type: 'schedule_share',
+          senderEmail: senderName,
+          todoId: todo.id, // 원본 일정 ID 저장
+        ).toMap()..addAll({
+          'targetUid': targetUid,
+          'sharedTodoData': todo.toMap(), // 일정 데이터 전체를 알림에 포함
+        }));
+      }
+    }
+  }
+
+  Future<String> acceptSharedTodo(String uid, Map<String, dynamic> todoData) async {
+    try {
+      final sharedTodo = Todo.fromMap(todoData);
+      final newTodo = Todo(
+        id: const Uuid().v4(),
+        userId: uid,
+        title: sharedTodo.title,
+        description: sharedTodo.description,
+        startDateTime: sharedTodo.startDateTime,
+        endDateTime: sharedTodo.endDateTime,
+        categories: [], // 카테고리는 사용자에 따라 다를 수 있으므로 비움
+        isCompleted: false,
+      );
+      await addTodo(newTodo);
+      return '성공';
+    } catch (e) {
+      return '실패: $e';
+    }
   }
 
   Future<void> deleteCategory(String uid, String id) async {
