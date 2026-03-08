@@ -364,6 +364,12 @@ class TodoProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void deleteCategory(String id) {
+    _categories.removeWhere((c) => c.id == id);
+    _saveCategories();
+    notifyListeners();
+  }
+
   List<Todo> filterTodosByDate(DateTime date, List<Todo> source) {
     final target = DateTime(date.year, date.month, date.day);
     return source.where((t) {
