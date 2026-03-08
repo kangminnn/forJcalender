@@ -274,6 +274,7 @@ class AuthProvider extends ChangeNotifier {
       final senderQuery = await _db.collection('users').where('email', isEqualTo: senderEmail).get();
       if (senderQuery.docs.isEmpty) return '보낸 사용자를 찾을 수 없습니다.';
       final senderDoc = senderQuery.docs.first;
+      final senderData = AppUser.fromMap(senderDoc.data());
       final senderUid = senderDoc.id;
       
       await _db.runTransaction((transaction) async {
@@ -286,15 +287,25 @@ class AuthProvider extends ChangeNotifier {
         });
       });
 
-      // 요청 보낸 사람에게 수락 알림 전송
+      // 상대방에게 알림 전송
       await _db.collection('notifications').add(AppNotification(
         id: const Uuid().v4(),
-        title: '친구 수락',
-        message: '${_currentUser!.name}님이 친구 요청을 수락했습니다.',
+        title: '친구 성사',
+        message: '${_currentUser!.name}님과 친구가 되었습니다.',
         timestamp: DateTime.now(),
         type: 'friend_accepted',
         senderEmail: _currentUser!.email,
       ).toMap()..addAll({'targetUid': senderUid}));
+
+      // 나에게 알림 전송
+      await _db.collection('notifications').add(AppNotification(
+        id: const Uuid().v4(),
+        title: '친구 성사',
+        message: '${senderData.name}님과 친구가 되었습니다.',
+        timestamp: DateTime.now(),
+        type: 'friend_accepted',
+        senderEmail: senderEmail,
+      ).toMap()..addAll({'targetUid': _currentUser!.uid}));
       
       final updated = await _db.collection('users').doc(_currentUser!.uid).get();
       _currentUser = AppUser.fromMap(updated.data()!);
@@ -302,6 +313,62 @@ class AuthProvider extends ChangeNotifier {
       return '성공';
     } catch (e) {
       return '수락 실패: $e';
+    }
+  }
+
+  Future<void> removeFriend(String friendEmail) async {
+    try {
+      final friendQuery = await _db.collection('users').where('email', isEqualTo: friendEmail).get();
+      if (friendQuery.docs.isEmpty) return;
+      final friendDoc = friendQuery.docs.first;
+
+      await _db.runTransaction((transaction) async {
+        transaction.update(_db.collection('users').doc(_currentUser!.uid), {
+          'friends': FieldValue.arrayRemove([friendEmail])
+        });
+        transaction.update(friendDoc.reference, {
+          'friends': FieldValue.arrayRemove([_currentUser!.email])
+        });
+      });
+
+      final updated = await _db.collection('users').doc(_currentUser!.uid).get();
+      _currentUser = AppUser.fromMap(updated.data()!);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<String?> deleteAccount() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return '로그인 정보가 없습니다.';
+
+      // 1. 모든 일정 삭제
+      final todos = await _db.collection('todos').where('userId', isEqualTo: user.uid).get();
+      for (var doc in todos.docs) await doc.reference.delete();
+
+      // 2. 모든 알림 삭제
+      final notifs = await _db.collection('notifications').where('targetUid', isEqualTo: user.uid).get();
+      for (var doc in notifs.docs) await doc.reference.delete();
+
+      // 3. 친구들의 목록에서 나를 제거
+      for (var friendEmail in _currentUser!.friends) {
+        final fQuery = await _db.collection('users').where('email', isEqualTo: friendEmail).get();
+        if (fQuery.docs.isNotEmpty) {
+          await fQuery.docs.first.reference.update({
+            'friends': FieldValue.arrayRemove([_currentUser!.email])
+          });
+        }
+      }
+
+      // 4. 사용자 문서 삭제 및 계정 삭제
+      await _db.collection('users').doc(user.uid).delete();
+      await user.delete();
+      
+      _currentUser = null;
+      notifyListeners();
+      return null;
+    } catch (e) {
+      return '회원 탈퇴 실패: $e (최근 로그인 기록이 필요할 수 있습니다.)';
     }
   }
 }
@@ -941,30 +1008,83 @@ class SettingsScreen extends StatelessWidget {
                     Navigator.pop(context);
                   },
                 ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.delete_forever, color: Colors.red),
+                  title: const Text('회원 탈퇴', style: TextStyle(color: Colors.red)),
+                  onTap: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (c) => AlertDialog(
+                        title: const Text('회원 탈퇴'),
+                        content: const Text('정말로 탈퇴하시겠습니까? 모든 데이터가 영구적으로 삭제됩니다.'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('취소')),
+                          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('탈퇴', style: TextStyle(color: Colors.red))),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      final err = await authProvider.deleteAccount();
+                      if (err != null && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                      } else if (context.mounted) {
+                        Navigator.pop(context);
+                      }
+                    }
+                  },
+                ),
               ],
             ),
           ),
           const SizedBox(height: 30),
-          const Text('친구 추가', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.grey)),
+          const Text('친구 관리', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.grey)),
           const SizedBox(height: 10),
           Card(
             elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.1))),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  Expanded(child: TextField(controller: nameController, decoration: const InputDecoration(hintText: '친구 이름 입력', border: InputBorder.none))),
-                  IconButton.filledTonal(onPressed: () async {
-                    if (nameController.text.isNotEmpty) {
-                      final msg = await authProvider.sendFriendRequest(nameController.text.trim());
-                      if(context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
-                        if (msg == '성공') nameController.clear();
-                      }
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    children: [
+                      Expanded(child: TextField(controller: nameController, decoration: const InputDecoration(hintText: '친구 이름 입력', border: InputBorder.none))),
+                      IconButton.filledTonal(onPressed: () async {
+                        if (nameController.text.isNotEmpty) {
+                          final msg = await authProvider.sendFriendRequest(nameController.text.trim());
+                          if(context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: msg == '성공' ? Colors.green : Colors.redAccent));
+                            if (msg == '성공') nameController.clear();
+                          }
+                        }
+                      }, icon: const Icon(Icons.person_add_alt_1)),
+                    ],
+                  ),
+                ),
+                if (authProvider.currentUser!.friends.isNotEmpty) ...[
+                  const Divider(height: 1),
+                  FutureBuilder<QuerySnapshot>(
+                    future: FirebaseFirestore.instance.collection('users').where('email', whereIn: authProvider.currentUser!.friends).get(),
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData) return const SizedBox();
+                      final friends = snapshot.data!.docs;
+                      return Column(
+                        children: friends.map((fDoc) {
+                          final f = AppUser.fromMap(fDoc.data() as Map<String, dynamic>);
+                          return ListTile(
+                            title: Text(f.name),
+                            subtitle: Text(f.email),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.person_remove, color: Colors.redAccent),
+                              onPressed: () => authProvider.removeFriend(f.email),
+                            ),
+                          );
+                        }).toList(),
+                      );
                     }
-                  }, icon: const Icon(Icons.person_add_alt_1)),
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
         ],
